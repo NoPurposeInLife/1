@@ -1,7 +1,7 @@
 # Set variables
 $FileToEncrypt = ".\Offline_WinPwn.ps1"   # File to encrypt
-$EncryptedFile = ".\Encrypted_WinPwn.dat" # Output encrypted file
-$Password = "YourStrongPassword"
+$EncryptedFile = ".\WinPwn_Encrypted.dat" # Output encrypted file
+$Password = "Y2233ourStr12312ongP2131assword455247786"
 
 # Function to derive key and IV from password
 function Get-AesKeyIv {
