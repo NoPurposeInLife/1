@@ -1,6 +1,6 @@
 # Set variables
-$FileToEncrypt = "C:\Path\To\Offline_WinPwn.ps1"   # File to encrypt
-$EncryptedFile = "C:\Path\To\Encrypted.dat"        # Output encrypted file
+$FileToEncrypt = .\Offline_WinPwn.ps1"   # File to encrypt
+$EncryptedFile = ".\Encrypted_WinPwn.dat"        # Output encrypted file
 $Password = "YourStrongPassword"
 
 # Function to encrypt a file
