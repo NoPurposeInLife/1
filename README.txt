@@ -1,25 +1,41 @@
 # Set variables
-$FileToEncrypt = .\Offline_WinPwn.ps1"   # File to encrypt
-$EncryptedFile = ".\Encrypted_WinPwn.dat"        # Output encrypted file
+$FileToEncrypt = ".\Offline_WinPwn.ps1"   # File to encrypt
+$EncryptedFile = ".\Encrypted_WinPwn.dat" # Output encrypted file
 $Password = "YourStrongPassword"
+
+# Function to derive key and IV from password
+function Get-AesKeyIv {
+    param ($Password)
+    
+    $Salt = New-Object byte[] 16
+    [Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($Salt)
+    
+    $KeyDerivation = New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, $Salt, 10000)
+    $Key = $KeyDerivation.GetBytes(32)
+    $IV = $KeyDerivation.GetBytes(16)
+
+    return $Key, $IV, $Salt
+}
 
 # Function to encrypt a file
 function Encrypt-File {
     param ($InputFile, $OutputFile, $Password)
 
-    # Read file bytes
-    $Bytes = [System.IO.File]::ReadAllBytes($InputFile)
-    
-    # Generate AES key & IV from password
-    $AES = [System.Security.Cryptography.AesManaged]::new()
-    $AES.Key = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(32)
-    $AES.IV = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(16)
-    $Encryptor = $AES.CreateEncryptor()
+    $Key, $IV, $Salt = Get-AesKeyIv -Password $Password
 
-    # Encrypt and write to file
+    $AES = [System.Security.Cryptography.AesManaged]::new()
+    $AES.Key = $Key
+    $AES.IV = $IV
+    $AES.Padding = "PKCS7"
+
+    $Encryptor = $AES.CreateEncryptor()
+    $Bytes = [System.IO.File]::ReadAllBytes($InputFile)
     $Encrypted = $Encryptor.TransformFinalBlock($Bytes, 0, $Bytes.Length)
-    [System.IO.File]::WriteAllBytes($OutputFile, $Encrypted)
-    
+
+    # Save salt + encrypted data
+    $FinalData = $Salt + $Encrypted
+    [System.IO.File]::WriteAllBytes($OutputFile, $FinalData)
+
     Write-Host "[+] File encrypted: $OutputFile"
 }
 
@@ -27,16 +43,23 @@ function Encrypt-File {
 function Decrypt-RunPS1 {
     param ($EncryptedFile, $Password)
 
-    # Read encrypted file
-    $Encrypted = [System.IO.File]::ReadAllBytes($EncryptedFile)
+    $Data = [System.IO.File]::ReadAllBytes($EncryptedFile)
 
-    # Generate AES key & IV from password
+    # Extract salt
+    $Salt = $Data[0..15]
+    $Encrypted = $Data[16..($Data.Length-1)]
+
+    # Re-derive key & IV
+    $KeyDerivation = New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, $Salt, 10000)
+    $Key = $KeyDerivation.GetBytes(32)
+    $IV = $KeyDerivation.GetBytes(16)
+
     $AES = [System.Security.Cryptography.AesManaged]::new()
-    $AES.Key = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(32)
-    $AES.IV = (New-Object Security.Cryptography.Rfc2898DeriveBytes($Password, 16)).GetBytes(16)
-    $Decryptor = $AES.CreateDecryptor()
+    $AES.Key = $Key
+    $AES.IV = $IV
+    $AES.Padding = "PKCS7"
 
-    # Decrypt file
+    $Decryptor = $AES.CreateDecryptor()
     $Decrypted = $Decryptor.TransformFinalBlock($Encrypted, 0, $Encrypted.Length)
     $DecryptedText = [System.Text.Encoding]::UTF8.GetString($Decrypted)
 
