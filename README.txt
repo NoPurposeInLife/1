@@ -1,20 +1,37 @@
-import sys
+MATCH (g:Group)-[r]->(c:Computer)
+WHERE g.name STARTS WITH 'DOMAIN COMPUTERS@'
+   OR g.name STARTS WITH 'DOMAIN USERS@'
+   OR g.name STARTS WITH 'USERS@'
+   OR g.name STARTS WITH 'EVERYONE@'
+   OR g.name STARTS WITH 'AUTHENTICATED USERS@'
+   OR g.name STARTS WITH 'GUESTS@'
+   OR g.name STARTS WITH 'DOMAIN GUESTS@'
+   OR g.name STARTS WITH 'INTERACTIVE@'
+   OR g.name STARTS WITH 'NETWORK@'
+   OR g.name STARTS WITH 'ANONYMOUS LOGON@'
+   OR g.name STARTS WITH 'LOCAL@'
+   OR g.name STARTS WITH 'THIS ORGANIZATION@'
+   OR g.name STARTS WITH 'NT AUTHORITY\\INTERACTIVE@'
+   OR g.name STARTS WITH 'NT AUTHORITY\\NETWORK@'
+   OR g.name STARTS WITH 'NT AUTHORITY\\SYSTEM@'
+   OR g.name STARTS WITH 'PRINCIPAL SELF@'
+RETURN c
 
-def parse_hostnames(file_path):
-    unique_hosts = set()
-
-    with open(file_path, "r") as f:
-        for line in f:
-            parts = line.strip().split("\t")
-            if len(parts) == 3 and ("true" in parts[1:] or "True" in parts[1:]):
-                unique_hosts.add(parts[0])
-
-    for host in sorted(unique_hosts):
-        print(host)
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python script.py <file>")
-        sys.exit(1)
-
-    parse_hostnames(sys.argv[1])
+MATCH (g:Group)-[r]->(u:User)
+WHERE g.name STARTS WITH 'DOMAIN COMPUTERS@'
+   OR g.name STARTS WITH 'DOMAIN USERS@'
+   OR g.name STARTS WITH 'USERS@'
+   OR g.name STARTS WITH 'EVERYONE@'
+   OR g.name STARTS WITH 'AUTHENTICATED USERS@'
+   OR g.name STARTS WITH 'GUESTS@'
+   OR g.name STARTS WITH 'DOMAIN GUESTS@'
+   OR g.name STARTS WITH 'INTERACTIVE@'
+   OR g.name STARTS WITH 'NETWORK@'
+   OR g.name STARTS WITH 'ANONYMOUS LOGON@'
+   OR g.name STARTS WITH 'LOCAL@'
+   OR g.name STARTS WITH 'THIS ORGANIZATION@'
+   OR g.name STARTS WITH 'NT AUTHORITY\\INTERACTIVE@'
+   OR g.name STARTS WITH 'NT AUTHORITY\\NETWORK@'
+   OR g.name STARTS WITH 'NT AUTHORITY\\SYSTEM@'
+   OR g.name STARTS WITH 'PRINCIPAL SELF@'
+RETURN u
