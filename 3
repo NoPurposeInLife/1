@@ -1,0 +1,34 @@
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+
+public class AdminCheck {
+    public static void main(String[] args) {
+        try {
+            ProcessBuilder builder = new ProcessBuilder("net", "session");
+            builder.redirectErrorStream(true);
+            Process process = builder.start();
+
+            BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream()));
+            String line;
+            boolean isAdmin = true;
+
+            while ((line = reader.readLine()) != null) {
+                // If command fails, it's likely due to insufficient privileges
+                if (line.contains("Access is denied")) {
+                    isAdmin = false;
+                    break;
+                }
+            }
+
+            process.waitFor();
+            if (isAdmin) {
+                System.out.println("You are running with Administrator privileges.");
+            } else {
+                System.out.println("You are NOT running with Administrator privileges.");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
