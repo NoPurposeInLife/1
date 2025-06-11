@@ -1,0 +1,14 @@
+Sub SendWithRedemption()
+  Dim SafeItem As Object
+  Dim FileSys As Object, HtmlBody As String
+  Set FileSys = CreateObject("Scripting.FileSystemObject")
+  HtmlBody = FileSys.OpenTextFile("C:\path\raw.html", 1).ReadAll
+
+  Set SafeItem = CreateObject("Redemption.SafeMailItem")
+  SafeItem.Item = Application.CreateItem(0)
+  SafeItem.Headers = "Content-Type: text/html; charset=UTF-8"
+  SafeItem.HTMLBody = HtmlBody
+  SafeItem.Recipients.Add "recipient@example.com"
+  SafeItem.Subject = "Raw HTML via Redemption"
+  SafeItem.Send
+End Sub
