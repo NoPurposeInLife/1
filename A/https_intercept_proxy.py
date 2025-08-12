@@ -504,7 +504,7 @@ class ProxyServer(threading.Thread):
         self.ca = ca_provider
         self.gui_queue = gui_queue
         self.intercept_flag = threading.Event()
-        self.intercept_flag.set()  # default ON
+        # self.intercept_flag.set()  # default OFF
         self._shutdown = threading.Event()
         self.tx_counter_ref = {'v': 1}
         self._sock = None
@@ -570,9 +570,9 @@ class ProxyGUI(QtWidgets.QMainWindow):
         # ----- Left: transaction list -----
         left = QtWidgets.QVBoxLayout()
         topbar = QtWidgets.QHBoxLayout()
-        self.intercept_btn = QtWidgets.QPushButton("Intercept: ON")
+        self.intercept_btn = QtWidgets.QPushButton("Intercept: OFF")
         self.intercept_btn.setCheckable(True)
-        self.intercept_btn.setChecked(True)
+        self.intercept_btn.setChecked(False)
         self.intercept_btn.clicked.connect(self.toggle_intercept)
         topbar.addWidget(self.intercept_btn)
         topbar.addStretch()
