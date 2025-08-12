@@ -15,6 +15,7 @@ Notes:
 - Plain HTTP and HTTPS (CONNECT) supported. HTTPS MITM requires client trusts CA.
 """
 
+import ipaddress
 import socket
 import threading
 import argparse
@@ -363,9 +364,22 @@ class ProxyWorker(threading.Thread):
                 upstream_raw = socket.create_connection((host, port), timeout=6)
                 client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
                 client_ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
-                client_ctx.check_hostname = True
-                client_ctx.verify_mode = ssl.CERT_REQUIRED
-                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
+                
+                is_ip = False
+                try:
+                    ipaddress.ip_address(host)
+                    is_ip = True
+                except ValueError:
+                    pass
+                
+                if is_ip:
+                    client_ctx.check_hostname = False
+                    # server_hostname=None disables SNI and hostname check
+                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
+                else:
+                    client_ctx.check_hostname = True
+                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
+
             except ssl.SSLError as e:
                 print(f"Upstream TLS connect failed with verification error: {e}, retrying without verification")
                 traceback.print_exc()
@@ -374,11 +388,12 @@ class ProxyWorker(threading.Thread):
                     client_ctx = ssl.create_default_context()
                     client_ctx.check_hostname = False
                     client_ctx.verify_mode = ssl.CERT_NONE
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
+                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
                 except Exception as e2:
                     print(f"Upstream TLS connect failed again: {e2}")
                     traceback.print_exc()
                     raise e2
+
 
             # Now we have decrypted sides: client_ssl <--> upstream
             self.mitm_exchange(client_ssl, upstream, host, port, is_tls=True)
