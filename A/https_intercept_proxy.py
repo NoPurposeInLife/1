@@ -312,7 +312,28 @@ import socket
 
 def handle(self):
     client = self.client_sock
-    # ... (your initial code before TLS setup remains unchanged)
+    # read first line + headers to detect CONNECT or normal request
+    try:
+        client.settimeout(5.0)
+        initial = b""
+        while b"\r\n" not in initial:
+            chunk = client.recv(4096)
+            if not chunk:
+                return
+            initial += chunk
+        # read rest of headers
+        while b"\r\n\r\n" not in initial:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            initial += chunk
+        client.settimeout(None)
+    except socket.timeout:
+        return
+
+    if not initial:
+        return
+    first_line = initial.split(b"\r\n", 1)[0].decode(errors="ignore")
 
     if first_line.upper().startswith("CONNECT"):
         # parse host and port as you already do...
