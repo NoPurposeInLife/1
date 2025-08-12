@@ -305,11 +305,6 @@ class ProxyWorker(threading.Thread):
             try: self.client_sock.close()
             except: pass
 
-    import ssl
-    import ipaddress
-    import traceback
-    import socket
-
     def handle(self):
         client = self.client_sock
         # read first line + headers to detect CONNECT or normal request
@@ -334,37 +329,52 @@ class ProxyWorker(threading.Thread):
         if not initial:
             return
         first_line = initial.split(b"\r\n", 1)[0].decode(errors="ignore")
-
         if first_line.upper().startswith("CONNECT"):
-            # parse host and port as you already do...
-            # reply 200 OK...
-            # wrap client socket with server cert...
+            # HTTPS CONNECT: format CONNECT host:port HTTP/1.1
+            try:
+                parts = first_line.split()
+                target = parts[1]
+                if ":" in target:
+                    host, port_s = target.split(":", 1)
+                    port = int(port_s)
+                else:
+                    host, port = target, 443
+            except Exception:
+                return
+            # reply OK
+            try:
+                client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            except Exception:
+                return
 
+            # Now wrap client socket with server-side TLS using generated cert for host
             cert_path, key_path = self.ca.get_cert_for(host)
+            import ssl
             server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             server_ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            # Wrap - perform handshake
             try:
                 client_ssl = server_ctx.wrap_socket(client, server_side=True)
             except Exception as e:
                 print("TLS wrap_socket (server) failed:", e)
                 return
 
-            # Upstream TLS connect - fixed here:
+            # Connect to upstream with TLS
             try:
                 upstream_raw = socket.create_connection((host, port), timeout=6)
-                client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)  # uses Windows CA store by default
-
+                client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                client_ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
+                
                 is_ip = False
                 try:
                     ipaddress.ip_address(host)
                     is_ip = True
                 except ValueError:
                     pass
-
+                
                 if is_ip:
-                    # Can't do hostname check on IP
                     client_ctx.check_hostname = False
-                    # Also disable SNI by passing None
+                    # server_hostname=None disables SNI and hostname check
                     upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
                 else:
                     client_ctx.check_hostname = True
@@ -385,64 +395,64 @@ class ProxyWorker(threading.Thread):
                     raise e2
 
 
-                # Now we have decrypted sides: client_ssl <--> upstream
-                self.mitm_exchange(client_ssl, upstream, host, port, is_tls=True)
-                try:
-                    client_ssl.close()
-                except: pass
-                try:
-                    upstream.close()
-                except: pass
-            else:
-                # Plain HTTP: we already have initial bytes; handle as normal HTTP connection
-                try:
-                    head = initial
-                    host, port = parse_host_port_from_request_head(head)
-                except Exception:
-                    return
-                # open upstream plain socket
-                try:
-                    upstream = socket.create_connection((host, port), timeout=6)
-                except Exception as e:
-                    print("Upstream connect failed:", e)
-                    try: upstream.close()
-                    except: pass
-                    return
-                # interact: read full request (including body if Content-Length)
-                req = recv_http_message(client, initial=head)
-                req = fix_request_line(req)
-                # create transaction
-                txid = self.tx_counter_ref['v']
-                self.tx_counter_ref['v'] += 1
-                tx = Transaction(id=txid, host=host, port=port, request_raw=req)
-                # notify GUI
-                self.gui_queue.put(("new_tx", tx))
-                # intercept if enabled
-                if self.intercept_flag.is_set():
-                    tx.intercepted_request = True
-                    tx.status = "waiting_request"
-                    self.gui_queue.put(("update_tx", tx))
-                    tx.request_event.wait()  # GUI sets event when forwarded
-                # send request upstream
-                upstream.sendall(tx.request_raw)
-                # get response
-                resp = recv_http_message(upstream)
-                tx.response_raw = resp
-                tx.response_ready = True
-                if self.intercept_flag.is_set():
-                    tx.intercepted_response = True
-                    tx.status = "waiting_response"
-                    self.gui_queue.put(("update_tx", tx))
-                    tx.response_event.wait()
-                # send back to client
-                try:
-                    client.sendall(tx.response_raw)
-                except:
-                    pass
-                tx.status = "forwarded"
-                self.gui_queue.put(("update_tx", tx))
+            # Now we have decrypted sides: client_ssl <--> upstream
+            self.mitm_exchange(client_ssl, upstream, host, port, is_tls=True)
+            try:
+                client_ssl.close()
+            except: pass
+            try:
+                upstream.close()
+            except: pass
+        else:
+            # Plain HTTP: we already have initial bytes; handle as normal HTTP connection
+            try:
+                head = initial
+                host, port = parse_host_port_from_request_head(head)
+            except Exception:
+                return
+            # open upstream plain socket
+            try:
+                upstream = socket.create_connection((host, port), timeout=6)
+            except Exception as e:
+                print("Upstream connect failed:", e)
                 try: upstream.close()
                 except: pass
+                return
+            # interact: read full request (including body if Content-Length)
+            req = recv_http_message(client, initial=head)
+            req = fix_request_line(req)
+            # create transaction
+            txid = self.tx_counter_ref['v']
+            self.tx_counter_ref['v'] += 1
+            tx = Transaction(id=txid, host=host, port=port, request_raw=req)
+            # notify GUI
+            self.gui_queue.put(("new_tx", tx))
+            # intercept if enabled
+            if self.intercept_flag.is_set():
+                tx.intercepted_request = True
+                tx.status = "waiting_request"
+                self.gui_queue.put(("update_tx", tx))
+                tx.request_event.wait()  # GUI sets event when forwarded
+            # send request upstream
+            upstream.sendall(tx.request_raw)
+            # get response
+            resp = recv_http_message(upstream)
+            tx.response_raw = resp
+            tx.response_ready = True
+            if self.intercept_flag.is_set():
+                tx.intercepted_response = True
+                tx.status = "waiting_response"
+                self.gui_queue.put(("update_tx", tx))
+                tx.response_event.wait()
+            # send back to client
+            try:
+                client.sendall(tx.response_raw)
+            except:
+                pass
+            tx.status = "forwarded"
+            self.gui_queue.put(("update_tx", tx))
+            try: upstream.close()
+            except: pass
 
     def mitm_exchange(self, client_sock: socket.socket, upstream_sock: socket.socket, host: str, port: int, is_tls: bool):
         """
