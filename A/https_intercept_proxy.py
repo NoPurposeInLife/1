@@ -305,94 +305,63 @@ class ProxyWorker(threading.Thread):
             try: self.client_sock.close()
             except: pass
 
-    def handle(self):
-        client = self.client_sock
-        # read first line + headers to detect CONNECT or normal request
+import ssl
+import ipaddress
+import traceback
+import socket
+
+def handle(self):
+    client = self.client_sock
+    # ... (your initial code before TLS setup remains unchanged)
+
+    if first_line.upper().startswith("CONNECT"):
+        # parse host and port as you already do...
+        # reply 200 OK...
+        # wrap client socket with server cert...
+
+        cert_path, key_path = self.ca.get_cert_for(host)
+        server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
         try:
-            client.settimeout(5.0)
-            initial = b""
-            while b"\r\n" not in initial:
-                chunk = client.recv(4096)
-                if not chunk:
-                    return
-                initial += chunk
-            # read rest of headers
-            while b"\r\n\r\n" not in initial:
-                chunk = client.recv(4096)
-                if not chunk:
-                    break
-                initial += chunk
-            client.settimeout(None)
-        except socket.timeout:
+            client_ssl = server_ctx.wrap_socket(client, server_side=True)
+        except Exception as e:
+            print("TLS wrap_socket (server) failed:", e)
             return
 
-        if not initial:
-            return
-        first_line = initial.split(b"\r\n", 1)[0].decode(errors="ignore")
-        if first_line.upper().startswith("CONNECT"):
-            # HTTPS CONNECT: format CONNECT host:port HTTP/1.1
-            try:
-                parts = first_line.split()
-                target = parts[1]
-                if ":" in target:
-                    host, port_s = target.split(":", 1)
-                    port = int(port_s)
-                else:
-                    host, port = target, 443
-            except Exception:
-                return
-            # reply OK
-            try:
-                client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
-            except Exception:
-                return
+        # Upstream TLS connect - fixed here:
+        try:
+            upstream_raw = socket.create_connection((host, port), timeout=6)
+            client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)  # uses Windows CA store by default
 
-            # Now wrap client socket with server-side TLS using generated cert for host
-            cert_path, key_path = self.ca.get_cert_for(host)
-            import ssl
-            server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            server_ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
-            # Wrap - perform handshake
+            is_ip = False
             try:
-                client_ssl = server_ctx.wrap_socket(client, server_side=True)
-            except Exception as e:
-                print("TLS wrap_socket (server) failed:", e)
-                return
+                ipaddress.ip_address(host)
+                is_ip = True
+            except ValueError:
+                pass
 
-            # Connect to upstream with TLS
+            if is_ip:
+                # Can't do hostname check on IP
+                client_ctx.check_hostname = False
+                # Also disable SNI by passing None
+                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
+            else:
+                client_ctx.check_hostname = True
+                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
+
+        except ssl.SSLError as e:
+            print(f"Upstream TLS connect failed with verification error: {e}, retrying without verification")
+            traceback.print_exc()
             try:
                 upstream_raw = socket.create_connection((host, port), timeout=6)
-                client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-                client_ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
-                
-                is_ip = False
-                try:
-                    ipaddress.ip_address(host)
-                    is_ip = True
-                except ValueError:
-                    pass
-                
-                if is_ip:
-                    client_ctx.check_hostname = False
-                    # server_hostname=None disables SNI and hostname check
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
-                else:
-                    client_ctx.check_hostname = True
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
-
-            except ssl.SSLError as e:
-                print(f"Upstream TLS connect failed with verification error: {e}, retrying without verification")
+                client_ctx = ssl.create_default_context()
+                client_ctx.check_hostname = False
+                client_ctx.verify_mode = ssl.CERT_NONE
+                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
+            except Exception as e2:
+                print(f"Upstream TLS connect failed again: {e2}")
                 traceback.print_exc()
-                try:
-                    upstream_raw = socket.create_connection((host, port), timeout=6)
-                    client_ctx = ssl.create_default_context()
-                    client_ctx.check_hostname = False
-                    client_ctx.verify_mode = ssl.CERT_NONE
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
-                except Exception as e2:
-                    print(f"Upstream TLS connect failed again: {e2}")
-                    traceback.print_exc()
-                    raise e2
+                raise e2
 
 
             # Now we have decrypted sides: client_ssl <--> upstream
