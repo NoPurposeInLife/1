@@ -27,6 +27,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 from queue import Queue, Empty
+import wincertstore
 
 # GUI
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -669,7 +670,7 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.resp_text.cursorPositionChanged.connect(self._resp_text_selection_changed)
         self.resp_hex.cursorPositionChanged.connect(self._resp_hex_selection_changed)
 
-        self.sort_asc = True  # ascending by default
+        self.sort_asc = False  # descending by default
 
         # Setup button and connect
         self.sort_btn = QtWidgets.QPushButton("Sort ASC")
