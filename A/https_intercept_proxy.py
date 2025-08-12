@@ -360,6 +360,8 @@ class ProxyWorker(threading.Thread):
                 upstream_raw = socket.create_connection((host, port), timeout=6)
                 client_sni = host
                 client_ctx = ssl.create_default_context()
+                client_ctx.check_hostname = False
+                client_ctx.verify_mode = ssl.CERT_NONE
                 upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=client_sni)
             except Exception as e:
                 print("Upstream TLS connect failed:", e)
