@@ -360,14 +360,22 @@ class ProxyWorker(threading.Thread):
             # Connect to upstream with TLS
             try:
                 upstream_raw = socket.create_connection((host, port), timeout=6)
-                client_sni = host
-                client_ctx = ssl.create_default_context(cafile=certifi.where())
-                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=client_sni)
-            except Exception as e:
-                print("Upstream TLS connect failed:", e)
-                try: client_ssl.close()
-                except: pass
-                return
+                client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                client_ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
+                client_ctx.check_hostname = True
+                client_ctx.verify_mode = ssl.CERT_REQUIRED
+                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
+            except ssl.SSLError as e:
+                print(f"Upstream TLS connect failed with verification error: {e}, retrying without verification")
+                try:
+                    upstream_raw = socket.create_connection((host, port), timeout=6)
+                    client_ctx = ssl.create_default_context()
+                    client_ctx.check_hostname = False
+                    client_ctx.verify_mode = ssl.CERT_NONE
+                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
+                except Exception as e2:
+                    print(f"Upstream TLS connect failed again: {e2}")
+                    raise e2
 
             # Now we have decrypted sides: client_ssl <--> upstream
             self.mitm_exchange(client_ssl, upstream, host, port, is_tls=True)
