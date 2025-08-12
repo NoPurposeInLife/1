@@ -29,6 +29,7 @@ from typing import Optional, Tuple
 from queue import Queue, Empty
 import wincertstore
 import certifi
+import traceback
 
 # GUI
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -367,6 +368,7 @@ class ProxyWorker(threading.Thread):
                 upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
             except ssl.SSLError as e:
                 print(f"Upstream TLS connect failed with verification error: {e}, retrying without verification")
+                traceback.print_exc()
                 try:
                     upstream_raw = socket.create_connection((host, port), timeout=6)
                     client_ctx = ssl.create_default_context()
@@ -375,6 +377,7 @@ class ProxyWorker(threading.Thread):
                     upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
                 except Exception as e2:
                     print(f"Upstream TLS connect failed again: {e2}")
+                    traceback.print_exc()
                     raise e2
 
             # Now we have decrypted sides: client_ssl <--> upstream
