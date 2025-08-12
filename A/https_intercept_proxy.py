@@ -360,13 +360,10 @@ class ProxyWorker(threading.Thread):
             try:
                 upstream_raw = socket.create_connection((host, port), timeout=6)
                 client_sni = host
-                ctx = ssl.create_default_context()
-                store = wincertstore.CertSystemStore("ROOT")
-
-                for cert in store.itercerts():
-                    ctx.load_verify_locations(cadata=cert.get_pem())
-
-                upstream = ctx.wrap_socket(upstream_raw, server_hostname=client_sni)
+                client_ctx = ssl.create_default_context()
+                client_ctx.check_hostname = False
+                client_ctx.verify_mode = ssl.CERT_NONE
+                upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=client_sni)
             except Exception as e:
                 print("Upstream TLS connect failed:", e)
                 try: client_ssl.close()
