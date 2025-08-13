@@ -308,9 +308,50 @@ class ProxyWorker(threading.Thread):
             try: self.client_sock.close()
             except: pass
 
+    def _connect_upstream_tls(self, host: str, port: int):
+        """Connect to upstream over TLS:
+           - First try verify with our CA (self.ca.ca_cert_pem)
+           - If that fails, retry with CERT_NONE + no hostname check.
+           Returns an SSL-wrapped socket.
+        """
+        import ssl
+
+        # Create bare TCP first
+        upstream_raw = socket.create_connection((host, port), timeout=6)
+
+        try:
+            ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            # trust our CA first
+            ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
+            # SNI only for hostnames (not IPs)
+            try:
+                ipaddress.ip_address(host)
+                is_ip = True
+            except ValueError:
+                is_ip = False
+
+            ctx.check_hostname = not is_ip
+            server_hostname = None if is_ip else host
+            upstream = ctx.wrap_socket(upstream_raw, server_hostname=server_hostname)
+            return upstream
+        except Exception as e:
+            # fallback: no-verify
+            try:
+                upstream_raw.close()
+            except:
+                pass
+
+            upstream_raw2 = socket.create_connection((host, port), timeout=6)
+            ctx2 = ssl.create_default_context()
+            ctx2.check_hostname = False
+            ctx2.verify_mode = ssl.CERT_NONE
+            upstream = ctx2.wrap_socket(upstream_raw2, server_hostname=None)
+            return upstream
+
     def handle(self):
         client = self.client_sock
-        # read first line + headers to detect CONNECT or normal request
+
+        # Read the initial headers
         try:
             client.settimeout(5.0)
             initial = b""
@@ -319,7 +360,6 @@ class ProxyWorker(threading.Thread):
                 if not chunk:
                     return
                 initial += chunk
-            # read rest of headers
             while b"\r\n\r\n" not in initial:
                 chunk = client.recv(4096)
                 if not chunk:
@@ -331,9 +371,11 @@ class ProxyWorker(threading.Thread):
 
         if not initial:
             return
+
         first_line = initial.split(b"\r\n", 1)[0].decode(errors="ignore")
+
+        # ------------------- HTTPS (CONNECT) -------------------
         if first_line.upper().startswith("CONNECT"):
-            # HTTPS CONNECT: format CONNECT host:port HTTP/1.1
             try:
                 parts = first_line.split()
                 target = parts[1]
@@ -344,185 +386,147 @@ class ProxyWorker(threading.Thread):
                     host, port = target, 443
             except Exception:
                 return
-            # reply OK
+
+            # Reply OK to CONNECT
             try:
                 client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
             except Exception:
                 return
 
-            # Now wrap client socket with server-side TLS using generated cert for host
-            cert_path, key_path = self.ca.get_cert_for(host)
+            # Terminate TLS to the client using our leaf cert
             import ssl
+            cert_path, key_path = self.ca.get_cert_for(host)
             server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             server_ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
-            # Wrap - perform handshake
             try:
                 client_ssl = server_ctx.wrap_socket(client, server_side=True)
             except Exception as e:
                 print("TLS wrap_socket (server) failed:", e)
                 return
 
-            # Connect to upstream with TLS
+            # Connect upstream with verify-then-fallback
             try:
-                upstream_raw = socket.create_connection((host, port), timeout=6)
-                client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-                client_ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
-                
-                is_ip = False
-                try:
-                    ipaddress.ip_address(host)
-                    is_ip = True
-                except ValueError:
-                    pass
-                
-                if is_ip:
-                    client_ctx.check_hostname = False
-                    # server_hostname=None disables SNI and hostname check
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
-                else:
-                    client_ctx.check_hostname = True
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=host)
-
-            except ssl.SSLError as e:
-                print(f"Upstream TLS connect failed with verification error: {e}, retrying without verification")
-                traceback.print_exc()
-                try:
-                    upstream_raw = socket.create_connection((host, port), timeout=6)
-                    client_ctx = ssl.create_default_context()
-                    client_ctx.check_hostname = False
-                    client_ctx.verify_mode = ssl.CERT_NONE
-                    upstream = client_ctx.wrap_socket(upstream_raw, server_hostname=None)
-                except Exception as e2:
-                    print(f"Upstream TLS connect failed again: {e2}")
-                    traceback.print_exc()
-                    raise e2
-
-
-            # Now we have decrypted sides: client_ssl <--> upstream
-            self.mitm_exchange(client_ssl, upstream, host, port, is_tls=True)
-            try:
-                client_ssl.close()
-            except: pass
-            try:
-                upstream.close()
-            except: pass
-        else:
-            # Plain HTTP: we already have initial bytes; handle as normal HTTP connection
-            try:
-                head = initial
-                host, port = parse_host_port_from_request_head(head)
-            except Exception:
-                return
-            # open upstream plain socket
-            try:
-                upstream = socket.create_connection((host, port), timeout=6)
+                upstream = self._connect_upstream_tls(host, port)
             except Exception as e:
-                print("Upstream connect failed:", e)
-                try: upstream.close()
+                print("Upstream TLS connect failed:", e)
+                try: client_ssl.close()
                 except: pass
                 return
-            # interact: read full request (including body if Content-Length)
-            req = recv_http_message(client, initial=head)
-            req = fix_request_line(req)
-            # create transaction
-            txid = self.tx_counter_ref['v']
-            self.tx_counter_ref['v'] += 1
-            first_line = req.split(b'\r\n', 1)[0].decode(errors='ignore')
-            parts = first_line.split()
-            if len(parts) >= 2:
-                method, path = parts[0], parts[1]
-            else:
-                method, path = "-", "-"
 
-            tx = Transaction(
-                id=txid,
-                host=host,
-                port=port,
-                request_raw=req,
-                request_method=method,
-                request_path=path
-            )
-            # notify GUI
-            self.gui_queue.put(("new_tx", tx))
-            # intercept if enabled
-            if self.intercept_flag.is_set():
-                tx.intercepted_request = True
-                tx.status = "waiting_request"
-                self.gui_queue.put(("update_tx", tx))
-                tx.request_event.wait()  # GUI sets event when forwarded
-            # send request upstream
-            upstream.sendall(tx.request_raw)
-            # get response
-            resp = recv_http_message(upstream)
-            tx.response_raw = resp
-            tx.response_ready = True
-            if self.intercept_flag.is_set():
-                tx.intercepted_response = True
-                tx.status = "waiting_response"
-                self.gui_queue.put(("update_tx", tx))
-                tx.response_event.wait()
-            # send back to client
-            try:
-                client.sendall(tx.response_raw)
-            except:
-                pass
-            tx.status = "forwarded"
-            self.gui_queue.put(("update_tx", tx))
+            # Decrypted tunnel: client_ssl <-> upstream
+            self.mitm_exchange(client_ssl, upstream, host, port, is_tls=True)
+            try: client_ssl.close()
+            except: pass
             try: upstream.close()
             except: pass
+            return
+
+        # ------------------- Plain HTTP -------------------
+        try:
+            head = initial
+            host, port = parse_host_port_from_request_head(head)
+        except Exception:
+            return
+
+        try:
+            upstream = socket.create_connection((host, port), timeout=6)
+        except Exception as e:
+            print("Upstream connect failed:", e)
+            try: upstream.close()
+            except: pass
+            return
+
+        # Read full request (includes body if Content-Length)
+        req = recv_http_message(client, initial=head)
+        # If you have a fix_request_line(), keep it. If not, remove next line.
+        try:
+            req = fix_request_line(req)
+        except NameError:
+            pass
+
+        # Create TX with method/path for list label
+        txid = self.tx_counter_ref['v']; self.tx_counter_ref['v'] += 1
+        fl = req.split(b'\r\n', 1)[0].decode(errors='ignore')
+        parts = fl.split()
+        method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
+        tx = Transaction(id=txid, host=host, port=port, request_raw=req,
+                         request_method=method, request_path=path)
+
+        self.gui_queue.put(("new_tx", tx))
+
+        # Intercept request if ON
+        if self.intercept_flag.is_set():
+            tx.intercepted_request = True
+            tx.status = "waiting_request"
+            self.gui_queue.put(("update_tx", tx))
+            tx.request_event.wait()
+
+        # Send upstream
+        upstream.sendall(tx.request_raw)
+
+        # Read response
+        resp = recv_http_message(upstream)
+        tx.response_raw = resp
+        tx.response_ready = True
+
+        if self.intercept_flag.is_set():
+            tx.intercepted_response = True
+            tx.status = "waiting_response"
+            # Tell GUI to populate Response tab right now
+            self.gui_queue.put(("show_response", tx))
+            # Optional also keep list updated
+            self.gui_queue.put(("update_tx", tx))
+            # Wait for GUI to edit and press "Forward Response"
+            tx.response_event.wait()
+
+        # Send back to client
+        try:
+            client.sendall(tx.response_raw)
+        except:
+            pass
+
+        tx.status = "completed"
+        self.gui_queue.put(("update_tx", tx))
+
+        try: upstream.close()
+        except: pass
 
     def mitm_exchange(self, client_sock: socket.socket, upstream_sock: socket.socket, host: str, port: int, is_tls: bool):
-        """
-        Read requests from client_sock, forward to upstream_sock, capture responses,
-        and allow GUI to intercept/modify using Transaction objects + events.
-        This function runs in this worker's thread.
-        """
-
         client = client_sock
         upstream = upstream_sock
-        # We'll loop: client -> upstream (requests), upstream -> client (responses)
-        # For simplicity, handle one request at a time in sequence.
+
         while True:
             try:
                 req = recv_http_message(client)
-                req = fix_request_line(req)
+                try:
+                    req = fix_request_line(req)
+                except NameError:
+                    pass
             except Exception:
                 break
             if not req:
                 break
 
             txid = self.tx_counter_ref['v']; self.tx_counter_ref['v'] += 1
-            first_line = req.split(b'\r\n', 1)[0].decode(errors='ignore')
-            parts = first_line.split()
-            if len(parts) >= 2:
-                method, path = parts[0], parts[1]
-            else:
-                method, path = "-", "-"
+            fl = req.split(b'\r\n', 1)[0].decode(errors='ignore')
+            parts = fl.split()
+            method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
 
-            tx = Transaction(
-                id=txid,
-                host=host,
-                port=port,
-                request_raw=req,
-                request_method=method,
-                request_path=path
-            )
+            tx = Transaction(id=txid, host=host, port=port, request_raw=req,
+                             request_method=method, request_path=path)
             self.gui_queue.put(("new_tx", tx))
 
-            # Wait for GUI forward if intercept enabled
             if self.intercept_flag.is_set():
                 tx.intercepted_request = True
                 tx.status = "waiting_request"
                 self.gui_queue.put(("update_tx", tx))
                 tx.request_event.wait()
 
-            # send to upstream
             try:
                 upstream.sendall(tx.request_raw)
             except Exception:
                 break
 
-            # read response
             try:
                 resp = recv_http_message(upstream)
             except Exception:
@@ -530,28 +534,27 @@ class ProxyWorker(threading.Thread):
 
             tx.response_raw = resp
             tx.response_ready = True
+
             if self.intercept_flag.is_set():
                 tx.intercepted_response = True
                 tx.status = "waiting_response"
+                self.gui_queue.put(("show_response", tx))  # <--- populate GUI
                 self.gui_queue.put(("update_tx", tx))
                 tx.response_event.wait()
 
-            # send back to client
             try:
                 client.sendall(tx.response_raw)
             except Exception:
                 break
 
-            tx.status = "forwarded"
+            tx.status = "completed"
             self.gui_queue.put(("update_tx", tx))
 
-        # done
-        try:
-            client.close()
+        try: client.close()
         except: pass
-        try:
-            upstream.close()
+        try: upstream.close()
         except: pass
+
 
 # -----------------------
 # Main Server Thread
@@ -601,69 +604,213 @@ class ProxyServer(threading.Thread):
                 self._sock.close()
         except: pass
 
-class RepeaterWidget(QtWidgets.QTabWidget):
+class RepeaterWidget(QtWidgets.QWidget):
+    """
+    Burp-like repeater:
+      - Tabs #1, #2, ...
+      - Host/Port + Send per tab
+      - Request/Response editors
+      - Search bar at the BOTTOM of each editor
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTabsClosable(True)
-        self.tabCloseRequested.connect(self.close_tab)
+        outer = QtWidgets.QVBoxLayout(self)
+        self.repeater_tabs = QtWidgets.QTabWidget()
+        self.repeater_tabs.setTabsClosable(True)
+        self.repeater_tabs.tabCloseRequested.connect(self.repeater_tabs.removeTab)
+        outer.addWidget(self.repeater_tabs)
 
-    def close_tab(self, index):
-        self.removeTab(index)
+    # ---------- public helpers ----------
+    def send_into_first(self, host: str, port: int, req_bytes: bytes):
+        """
+        If tab #1 exists and its request editor is empty -> fill it.
+        Else create a new tab.
+        """
+        if self.repeater_tabs.count() == 0:
+            self.add_repeater_tab(host, port, req_bytes, make_active=False)
+            return
 
-    def add_repeater_tab(self, host, port, req_data):
-        repeater_tab = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(repeater_tab)
+        # Try to fill first if empty
+        w = self.repeater_tabs.widget(0)
+        req_edit = w.findChild(QtWidgets.QPlainTextEdit, "req_text")
+        host_edit = w.findChild(QtWidgets.QLineEdit, "host_edit")
+        port_edit = w.findChild(QtWidgets.QLineEdit, "port_edit")
+        resp_edit = w.findChild(QtWidgets.QPlainTextEdit, "resp_text")
 
-        # Host / Port controls
-        top_layout = QtWidgets.QHBoxLayout()
+        if req_edit and (req_edit.toPlainText().strip() == ""):
+            host_edit.setText(host)
+            port_edit.setText(str(port))
+            req_edit.setPlainText(req_bytes.decode(errors="ignore") if isinstance(req_bytes, bytes) else str(req_bytes))
+            if resp_edit:
+                resp_edit.clear()
+        else:
+            self.add_repeater_tab(host, port, req_bytes, make_active=False)
+
+    def add_repeater_tab(self, host, port, req_data, make_active=True):
+        repeater_inner = QtWidgets.QWidget()
+        repeater_layout = QtWidgets.QVBoxLayout(repeater_inner)
+
+        # Host/Port edit row
+        host_port_layout = QtWidgets.QHBoxLayout()
         host_edit = QtWidgets.QLineEdit(host)
         port_edit = QtWidgets.QLineEdit(str(port))
         send_btn = QtWidgets.QPushButton("Send")
-        top_layout.addWidget(QtWidgets.QLabel("Host:"))
-        top_layout.addWidget(host_edit)
-        top_layout.addWidget(QtWidgets.QLabel("Port:"))
-        top_layout.addWidget(port_edit)
-        top_layout.addWidget(send_btn)
-        layout.addLayout(top_layout)
+        send_btn.clicked.connect(lambda: self.send_repeater_request(host_edit, port_edit, req_text, resp_text))
+        host_port_layout.addWidget(QtWidgets.QLabel("Host:"))
+        host_port_layout.addWidget(host_edit)
+        host_port_layout.addWidget(QtWidgets.QLabel("Port:"))
+        host_port_layout.addWidget(port_edit)
+        host_port_layout.addWidget(send_btn)
+        repeater_layout.addLayout(host_port_layout)
 
-        # Request / Response text areas
+        # Request editor + search bar
         req_text = QtWidgets.QPlainTextEdit()
         req_text.setFont(QtGui.QFont("Consolas", 10))
-        req_text.setPlainText(req_data.decode(errors="ignore"))
+        req_text.setPlainText(req_data.decode(errors="replace") if isinstance(req_data, bytes) else req_data)
+        repeater_layout.addWidget(req_text)
+        repeater_layout.addLayout(self._make_search_bar(req_text))  # Search under request
+
+        # Response editor + search bar
         resp_text = QtWidgets.QPlainTextEdit()
         resp_text.setFont(QtGui.QFont("Consolas", 10))
+        resp_text.setReadOnly(True)
+        repeater_layout.addWidget(resp_text)
+        repeater_layout.addLayout(self._make_search_bar(resp_text))  # Search under response
 
-        layout.addWidget(req_text)
-        layout.addWidget(resp_text)
+        # Keyboard shortcut CTRL+R for resend
+        shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+R"), req_text)
+        shortcut.activated.connect(lambda: self.add_repeater_tab(
+            host_edit.text(),
+            port_edit.text(),
+            req_text.toPlainText(),
+            make_active=True
+        ))
 
-        # Send button logic
-        def send_request():
-            host_val = host_edit.text()
-            try:
-                port_val = int(port_edit.text())
-            except ValueError:
-                resp_text.setPlainText("Invalid port")
+
+        # Context menu "Send to Repeater"
+        req_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        def repeater_context_menu(pos):
+            menu = req_text.createStandardContextMenu()
+            action = menu.addAction("Send to Repeater")
+            action.triggered.connect(lambda: self.add_repeater_tab(host_edit.text(), port_edit.text(), req_text.toPlainText()))
+            menu.exec_(req_text.mapToGlobal(pos))
+        req_text.customContextMenuRequested.connect(repeater_context_menu)
+
+        # Keyboard shortcut CTRL+Enter for resend (works when request editor is focused)
+        send_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+Return"), req_text)
+        send_shortcut.activated.connect(
+            lambda: self.send_repeater_request(
+                host_edit,
+                port_edit,
+                req_text,
+                resp_text
+            )
+        )
+
+        # Add tab
+        idx = self.repeater_tabs.addTab(repeater_inner, f"#{self.repeater_tabs.count() + 1}")
+        if make_active:
+            self.repeater_tabs.setCurrentIndex(idx)
+        return idx
+
+    # ---------- internals ----------
+    def _make_search_bar(self, editor: QtWidgets.QPlainTextEdit) -> QtWidgets.QHBoxLayout:
+        """
+        Bottom search bar for an editor. Enter/Next jumps to next match.
+        """
+        h = QtWidgets.QHBoxLayout()
+        find_box = QtWidgets.QLineEdit()
+        find_box.setPlaceholderText("Search…")
+        next_btn = QtWidgets.QPushButton("Next")
+
+        def find_next():
+            pat = find_box.text()
+            if not pat:
                 return
+            if not editor.find(pat):
+                # wrap to start
+                cur = editor.textCursor()
+                cur.setPosition(0)
+                editor.setTextCursor(cur)
+                editor.find(pat)
+
+        find_box.returnPressed.connect(find_next)
+        next_btn.clicked.connect(find_next)
+
+        h.addWidget(find_box)
+        h.addWidget(next_btn)
+        return h
+
+    def send_repeater_request(self, host_edit, port_edit, req_text_edit, resp_text_edit):
+        """
+        Connect to host:port, optionally TLS (port 443), send request,
+        read one response using recv_http_message(), ignore cert verification.
+        """
+        host = host_edit.text().strip()
+        try:
+            port = int(port_edit.text())
+        except ValueError:
+            resp_text_edit.setPlainText("Invalid port")
+            return
+
+        req_bytes = req_text_edit.toPlainText().encode()
+
+        try:
+            s = socket.create_connection((host, port), timeout=7)
+            if port == 443:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                s = ctx.wrap_socket(s, server_hostname=None)
+
+            # send
+            s.sendall(req_bytes)
+
+            # read one HTTP message using your helper
             try:
-                s = socket.create_connection((host_val, port_val), timeout=5)
-                if port_val == 443:
-                    ctx = ssl.create_default_context()
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                    s = ctx.wrap_socket(s, server_hostname=None)
-                req_bytes = req_text.toPlainText().encode()
-                s.sendall(req_bytes)
                 resp = recv_http_message(s)
-                s.close()
-                resp_text.setPlainText(resp.decode(errors="ignore"))
-            except Exception as e:
-                resp_text.setPlainText(str(e))
+            except Exception:
+                # fallback: read until close
+                resp = b""
+                s.settimeout(2.0)
+                try:
+                    while True:
+                        chunk = s.recv(4096)
+                        if not chunk:
+                            break
+                        resp += chunk
+                except Exception:
+                    pass
 
-        send_btn.clicked.connect(send_request)
+            s.close()
+            resp_text_edit.setPlainText(resp.decode(errors="ignore"))
+        except Exception as e:
+            resp_text_edit.setPlainText(str(e))
 
-        self.addTab(repeater_tab, f"Repeater #{self.count()+1}")
+# ---------------- Search Helper ----------------
+def create_search_bar(edit_widget):
+    search_layout = QtWidgets.QHBoxLayout()
+    search_box = QtWidgets.QLineEdit()
+    search_box.setPlaceholderText("Search...")
+    next_btn = QtWidgets.QPushButton("Next")
 
+    def do_search():
+        text = search_box.text()
+        if not text:
+            return
+        if not edit_widget.find(text):
+            # If no match from current cursor, restart search from top
+            cursor = edit_widget.textCursor()
+            cursor.movePosition(QtGui.QTextCursor.Start)
+            edit_widget.setTextCursor(cursor)
+            edit_widget.find(text)
 
+    next_btn.clicked.connect(do_search)
+    search_box.returnPressed.connect(do_search)
+
+    search_layout.addWidget(search_box)
+    search_layout.addWidget(next_btn)
+    return search_layout
             
 # -----------------------
 # GUI (PyQt5)
@@ -673,13 +820,13 @@ import socket, ssl
 from queue import Queue
 
 class ProxyGUI(QtWidgets.QMainWindow):
-    def __init__(self, server, gui_queue: Queue, ca_provider):
+    def __init__(self, server, gui_queue: Queue, ca_provider, host, port):
         super().__init__()
         self.server = server
         self.gui_queue = gui_queue
         self.ca = ca_provider
-        self.setWindowTitle(f"MITM Proxy (threaded)")
-        self.resize(1100, 700)
+        self.setWindowTitle(f"MITM Proxy (threaded) - Listening on {host}:{port}")
+        self.resize(1600, 700)
         self.transactions = {}  # id -> Transaction
         self._build_ui()
 
@@ -719,52 +866,77 @@ class ProxyGUI(QtWidgets.QMainWindow):
         right = QtWidgets.QVBoxLayout()
         self.tab = QtWidgets.QTabWidget()
 
-        # Request tab
+
+        # ---------------- Main Tab: Request Tab ----------------
         self.req_widget = QtWidgets.QWidget()
         req_layout = QtWidgets.QVBoxLayout(self.req_widget)
         req_controls = QtWidgets.QHBoxLayout()
-        self.req_hex_btn = QtWidgets.QPushButton("Hex View")
-        self.req_hex_btn.setCheckable(True)
-        self.req_hex_btn.toggled.connect(self.toggle_req_hex)
-        req_controls.addWidget(self.req_hex_btn)
         self.req_forward_btn = QtWidgets.QPushButton("Forward Request")
         self.req_forward_btn.clicked.connect(self.forward_request)
         req_controls.addStretch()
         req_controls.addWidget(self.req_forward_btn)
         req_layout.addLayout(req_controls)
 
-        req_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        req_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+
+        # Request editor
         self.req_text = QtWidgets.QPlainTextEdit()
         self.req_text.setFont(QtGui.QFont("Consolas", 10))
         self.req_hex = QtWidgets.QPlainTextEdit()
         self.req_hex.setFont(QtGui.QFont("Consolas", 10))
-        req_splitter.addWidget(self.req_text)
-        req_splitter.addWidget(self.req_hex)
-        req_layout.addWidget(req_splitter)
+
+        req_splitter_top = QtWidgets.QWidget()
+        req_splitter_top_layout = QtWidgets.QVBoxLayout(req_splitter_top)
+        req_splitter_top_layout.addWidget(self.req_text)
+        req_splitter_top_layout.addLayout(create_search_bar(self.req_text))
+
+        req_splitter_bottom = QtWidgets.QWidget()
+        req_splitter_bottom_layout = QtWidgets.QVBoxLayout(req_splitter_bottom)
+        req_splitter_bottom_layout.addWidget(self.req_hex)
+        req_splitter_bottom_layout.addLayout(create_search_bar(self.req_hex))
+
+        splitter_inner = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter_inner.addWidget(req_splitter_top)
+        splitter_inner.addWidget(req_splitter_bottom)
+
+        req_layout.addWidget(splitter_inner)
         self.tab.addTab(self.req_widget, "Request")
 
-        # Response tab
+
+        # ---------------- Main Tab: Response Tab ----------------
         self.resp_widget = QtWidgets.QWidget()
         resp_layout = QtWidgets.QVBoxLayout(self.resp_widget)
         resp_controls = QtWidgets.QHBoxLayout()
-        self.resp_hex_btn = QtWidgets.QPushButton("Hex View")
-        self.resp_hex_btn.setCheckable(True)
-        self.resp_hex_btn.toggled.connect(self.toggle_resp_hex)
-        resp_controls.addWidget(self.resp_hex_btn)
         self.resp_forward_btn = QtWidgets.QPushButton("Forward Response")
         self.resp_forward_btn.clicked.connect(self.forward_response)
         resp_controls.addStretch()
         resp_controls.addWidget(self.resp_forward_btn)
         resp_layout.addLayout(resp_controls)
 
-        resp_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        # Create editors
         self.resp_text = QtWidgets.QPlainTextEdit()
         self.resp_text.setFont(QtGui.QFont("Consolas", 10))
+
         self.resp_hex = QtWidgets.QPlainTextEdit()
         self.resp_hex.setFont(QtGui.QFont("Consolas", 10))
-        resp_splitter.addWidget(self.resp_text)
-        resp_splitter.addWidget(self.resp_hex)
-        resp_layout.addWidget(resp_splitter)
+
+        # Add search bars
+        resp_splitter_top = QtWidgets.QWidget()
+        resp_splitter_top_layout = QtWidgets.QVBoxLayout(resp_splitter_top)
+        resp_splitter_top_layout.addWidget(self.resp_text)
+        resp_splitter_top_layout.addLayout(create_search_bar(self.resp_text))
+
+        resp_splitter_bottom = QtWidgets.QWidget()
+        resp_splitter_bottom_layout = QtWidgets.QVBoxLayout(resp_splitter_bottom)
+        resp_splitter_bottom_layout.addWidget(self.resp_hex)
+        resp_splitter_bottom_layout.addLayout(create_search_bar(self.resp_hex))
+
+        # Combine text + hex in a splitter
+        splitter_resp = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter_resp.addWidget(resp_splitter_top)
+        splitter_resp.addWidget(resp_splitter_bottom)
+
+        resp_layout.addWidget(splitter_resp)
         self.tab.addTab(self.resp_widget, "Response")
 
         right.addWidget(self.tab)
@@ -876,7 +1048,21 @@ class ProxyGUI(QtWidgets.QMainWindow):
                 it.setText(f"#{tx.id} {tx.host}:{tx.port} {tx.request_method} {tx.request_path} [{tx.status}]")
                 break
 
+    def _show_response_tab(self, tx: Transaction):
+        try:
+            text_str = tx.response_raw.decode(errors="replace")
+        except:
+            text_str = ""
+        self.resp_text.setPlainText(text_str)
 
+        # If you have hex view
+        self.resp_hex.setPlainText(
+            ' '.join(f"{b:02x}" for b in tx.response_raw)
+        )
+
+        # Optionally auto-switch to the Response tab
+        index = self.tab.indexOf(self.resp_widget)
+        self.tab.setCurrentIndex(index)
 
     def _req_text_selection_changed(self):
         if self._updating_req:
@@ -1060,6 +1246,8 @@ class ProxyGUI(QtWidgets.QMainWindow):
                     self._add_tx(obj)
                 elif typ == "update_tx":
                     self._update_tx(obj)
+                elif typ == "show_response":
+                    self._show_response_tab(obj)
         except Empty:
             pass
 
@@ -1119,19 +1307,15 @@ class ProxyGUI(QtWidgets.QMainWindow):
         if not tx:
             self.status_label.setText("No transaction selected")
             return
-        # get bytes from pane
-        if self.req_hex_btn.isChecked():
-            try:
-                newb = hex_view_to_bytes(self.req_hex.toPlainText())
-            except Exception as e:
-                self.status_label.setText("Invalid hex")
-                return
-        else:
-            newb = self.req_text.toPlainText().encode()
+
+        # always take from req_text now
+        newb = self.req_text.toPlainText().encode()
+
         with tx.lock:
             tx.request_raw = newb
             tx.request_event.set()
             tx.status = "req_forwarded"
+
         self._update_tx(tx)
         self.status_label.setText(f"Request #{tx.id} forwarded")
 
@@ -1140,20 +1324,19 @@ class ProxyGUI(QtWidgets.QMainWindow):
         if not tx:
             self.status_label.setText("No transaction selected")
             return
-        if self.resp_hex_btn.isChecked():
-            try:
-                newb = hex_view_to_bytes(self.resp_hex.toPlainText())
-            except Exception:
-                self.status_label.setText("Invalid hex")
-                return
-        else:
-            newb = self.resp_text.toPlainText().encode()
+
+        # Always get from response editor
+        edited_bytes = self.resp_text.toPlainText().encode()
+
         with tx.lock:
-            tx.response_raw = newb
-            tx.response_event.set()
+            tx.response_raw = edited_bytes  # Replace with edited response
+            tx.response_event.set()         # Resume proxy thread
             tx.status = "resp_forwarded"
+
         self._update_tx(tx)
         self.status_label.setText(f"Response #{tx.id} forwarded")
+
+
 
 # -----------------------
 # Entrypoint
@@ -1176,7 +1359,7 @@ def main():
     server.start()
 
     app = QtWidgets.QApplication(sys.argv)
-    gui = ProxyGUI(server, gui_queue, ca)
+    gui = ProxyGUI(server, gui_queue, ca, host, port)
     gui.show()
 
     try:
