@@ -79,6 +79,8 @@ class Transaction:
     request_event: threading.Event = field(default_factory=threading.Event)
     response_event: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    request_method: str = ""
+    request_path: str = ""
 
 # -----------------------
 # CA Provider (DER/PEM handling + leaf cert gen)
@@ -424,7 +426,21 @@ class ProxyWorker(threading.Thread):
             # create transaction
             txid = self.tx_counter_ref['v']
             self.tx_counter_ref['v'] += 1
-            tx = Transaction(id=txid, host=host, port=port, request_raw=req)
+            first_line = req.split(b'\r\n', 1)[0].decode(errors='ignore')
+            parts = first_line.split()
+            if len(parts) >= 2:
+                method, path = parts[0], parts[1]
+            else:
+                method, path = "-", "-"
+
+            tx = Transaction(
+                id=txid,
+                host=host,
+                port=port,
+                request_raw=req,
+                request_method=method,
+                request_path=path
+            )
             # notify GUI
             self.gui_queue.put(("new_tx", tx))
             # intercept if enabled
@@ -475,7 +491,21 @@ class ProxyWorker(threading.Thread):
                 break
 
             txid = self.tx_counter_ref['v']; self.tx_counter_ref['v'] += 1
-            tx = Transaction(id=txid, host=host, port=port, request_raw=req)
+            first_line = req.split(b'\r\n', 1)[0].decode(errors='ignore')
+            parts = first_line.split()
+            if len(parts) >= 2:
+                method, path = parts[0], parts[1]
+            else:
+                method, path = "-", "-"
+
+            tx = Transaction(
+                id=txid,
+                host=host,
+                port=port,
+                request_raw=req,
+                request_method=method,
+                request_path=path
+            )
             self.gui_queue.put(("new_tx", tx))
 
             # Wait for GUI forward if intercept enabled
@@ -712,13 +742,13 @@ class ProxyGUI(QtWidgets.QMainWindow):
         tx_ids = sorted(self.transactions.keys(), reverse=not self.sort_asc)
         for txid in tx_ids:
             tx = self.transactions[txid]
-            it = QtWidgets.QListWidgetItem(f"#{tx.id} {tx.host}:{tx.port} [{tx.status}]")
+            it = QtWidgets.QListWidgetItem(f"#{tx.id} {tx.host}:{tx.port} {tx.request_method} {tx.request_path} [{tx.status}]")
             it.setData(QtCore.Qt.UserRole, tx.id)
             self.tx_list.addItem(it)  # append bottom for ascending
 
     def _add_tx(self, tx: Transaction):
         self.transactions[tx.id] = tx
-        it = QtWidgets.QListWidgetItem(f"#{tx.id} {tx.host}:{tx.port} [{tx.status}]")
+        it = QtWidgets.QListWidgetItem(f"#{tx.id} {tx.host}:{tx.port} {tx.request_method} {tx.request_path} [{tx.status}]")
         it.setData(QtCore.Qt.UserRole, tx.id)
         # Insert item according to sort order:
         if self.sort_asc:
@@ -730,7 +760,7 @@ class ProxyGUI(QtWidgets.QMainWindow):
         for i in range(self.tx_list.count()):
             it = self.tx_list.item(i)
             if it.data(QtCore.Qt.UserRole) == tx.id:
-                it.setText(f"#{tx.id} {tx.host}:{tx.port} [{tx.status}]")
+                it.setText(f"#{tx.id} {tx.host}:{tx.port} {tx.request_method} {tx.request_path} [{tx.status}]")
                 break
 
 
