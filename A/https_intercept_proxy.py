@@ -31,6 +31,7 @@ from queue import Queue, Empty
 import wincertstore
 import certifi
 import traceback
+import ssl
 
 # GUI
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -600,37 +601,109 @@ class ProxyServer(threading.Thread):
                 self._sock.close()
         except: pass
 
+class RepeaterWidget(QtWidgets.QTabWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTabsClosable(True)
+        self.tabCloseRequested.connect(self.close_tab)
+
+    def close_tab(self, index):
+        self.removeTab(index)
+
+    def add_repeater_tab(self, host, port, req_data):
+        repeater_tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(repeater_tab)
+
+        # Host / Port controls
+        top_layout = QtWidgets.QHBoxLayout()
+        host_edit = QtWidgets.QLineEdit(host)
+        port_edit = QtWidgets.QLineEdit(str(port))
+        send_btn = QtWidgets.QPushButton("Send")
+        top_layout.addWidget(QtWidgets.QLabel("Host:"))
+        top_layout.addWidget(host_edit)
+        top_layout.addWidget(QtWidgets.QLabel("Port:"))
+        top_layout.addWidget(port_edit)
+        top_layout.addWidget(send_btn)
+        layout.addLayout(top_layout)
+
+        # Request / Response text areas
+        req_text = QtWidgets.QPlainTextEdit()
+        req_text.setFont(QtGui.QFont("Consolas", 10))
+        req_text.setPlainText(req_data.decode(errors="ignore"))
+        resp_text = QtWidgets.QPlainTextEdit()
+        resp_text.setFont(QtGui.QFont("Consolas", 10))
+
+        layout.addWidget(req_text)
+        layout.addWidget(resp_text)
+
+        # Send button logic
+        def send_request():
+            host_val = host_edit.text()
+            try:
+                port_val = int(port_edit.text())
+            except ValueError:
+                resp_text.setPlainText("Invalid port")
+                return
+            try:
+                s = socket.create_connection((host_val, port_val), timeout=5)
+                if port_val == 443:
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    s = ctx.wrap_socket(s, server_hostname=None)
+                req_bytes = req_text.toPlainText().encode()
+                s.sendall(req_bytes)
+                resp = recv_http_message(s)
+                s.close()
+                resp_text.setPlainText(resp.decode(errors="ignore"))
+            except Exception as e:
+                resp_text.setPlainText(str(e))
+
+        send_btn.clicked.connect(send_request)
+
+        self.addTab(repeater_tab, f"Repeater #{self.count()+1}")
+
+
+            
 # -----------------------
 # GUI (PyQt5)
 # -----------------------
+from PyQt5 import QtWidgets, QtCore, QtGui
+import socket, ssl
+from queue import Queue
+
 class ProxyGUI(QtWidgets.QMainWindow):
-    def __init__(self, server: ProxyServer, gui_queue: Queue, ca_provider: CAProvider):
+    def __init__(self, server, gui_queue: Queue, ca_provider):
         super().__init__()
         self.server = server
         self.gui_queue = gui_queue
         self.ca = ca_provider
-        self.setWindowTitle(f"MITM Proxy (threaded) - Listening on {host}:{port_s}")
+        self.setWindowTitle(f"MITM Proxy (threaded)")
         self.resize(1100, 700)
         self.transactions = {}  # id -> Transaction
         self._build_ui()
-        # timer to poll queue
+
+        # Timer to poll queue
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self._process_queue)
         self.timer.start(100)
 
     def _build_ui(self):
-        w = QtWidgets.QWidget()
-        self.setCentralWidget(w)
-        layout = QtWidgets.QHBoxLayout(w)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(8)
+        # Main tab widget: Proxy / Repeater pages
+        self.main_tab = QtWidgets.QTabWidget()
+        self.setCentralWidget(self.main_tab)
 
-        # ----- Left: transaction list -----
+        # ---------------- Proxy Page ----------------
+        self.proxy_main_widget = QtWidgets.QWidget()
+        proxy_layout = QtWidgets.QHBoxLayout(self.proxy_main_widget)
+        proxy_layout.setContentsMargins(6, 6, 6, 6)
+        proxy_layout.setSpacing(8)
+
+        # Left: Transaction list
         left = QtWidgets.QVBoxLayout()
         topbar = QtWidgets.QHBoxLayout()
         self.intercept_btn = QtWidgets.QPushButton("Intercept: OFF")
         self.intercept_btn.setCheckable(True)
-        self.intercept_btn.setChecked(False)
         self.intercept_btn.clicked.connect(self.toggle_intercept)
         topbar.addWidget(self.intercept_btn)
         topbar.addStretch()
@@ -640,30 +713,26 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.tx_list.setFont(QtGui.QFont("Consolas", 10))
         self.tx_list.itemSelectionChanged.connect(self.on_tx_select)
         left.addWidget(self.tx_list)
-        layout.addLayout(left, 3)
+        proxy_layout.addLayout(left, 3)
 
-        # ----- Right: request/response tabs -----
+        # Right: Request/Response tabs
         right = QtWidgets.QVBoxLayout()
         self.tab = QtWidgets.QTabWidget()
 
         # Request tab
         self.req_widget = QtWidgets.QWidget()
         req_layout = QtWidgets.QVBoxLayout(self.req_widget)
-
-        # Controls for request
         req_controls = QtWidgets.QHBoxLayout()
         self.req_hex_btn = QtWidgets.QPushButton("Hex View")
         self.req_hex_btn.setCheckable(True)
         self.req_hex_btn.toggled.connect(self.toggle_req_hex)
         req_controls.addWidget(self.req_hex_btn)
-
         self.req_forward_btn = QtWidgets.QPushButton("Forward Request")
         self.req_forward_btn.clicked.connect(self.forward_request)
         req_controls.addStretch()
         req_controls.addWidget(self.req_forward_btn)
         req_layout.addLayout(req_controls)
 
-        # Request editors
         req_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.req_text = QtWidgets.QPlainTextEdit()
         self.req_text.setFont(QtGui.QFont("Consolas", 10))
@@ -677,13 +746,11 @@ class ProxyGUI(QtWidgets.QMainWindow):
         # Response tab
         self.resp_widget = QtWidgets.QWidget()
         resp_layout = QtWidgets.QVBoxLayout(self.resp_widget)
-
         resp_controls = QtWidgets.QHBoxLayout()
         self.resp_hex_btn = QtWidgets.QPushButton("Hex View")
         self.resp_hex_btn.setCheckable(True)
         self.resp_hex_btn.toggled.connect(self.toggle_resp_hex)
         resp_controls.addWidget(self.resp_hex_btn)
-
         self.resp_forward_btn = QtWidgets.QPushButton("Forward Response")
         self.resp_forward_btn.clicked.connect(self.forward_response)
         resp_controls.addStretch()
@@ -701,36 +768,82 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.tab.addTab(self.resp_widget, "Response")
 
         right.addWidget(self.tab)
+
+        # Status label
         self.status_label = QtWidgets.QLabel("Ready")
         right.addWidget(self.status_label)
-        layout.addLayout(right, 7)
+        proxy_layout.addLayout(right, 7)
 
-        # guards to avoid recursion
+        # Add Proxy page to main tab
+        self.main_tab.addTab(self.proxy_main_widget, "Proxy")
+
+        # ---------------- Repeater Page ----------------
+        self.repeater_widget = RepeaterWidget()
+        self.main_tab.addTab(self.repeater_widget, "Repeater")
+
+        # Ctrl+R shortcut to send to repeater
+        shortcut = QtWidgets.QShortcut(QtCore.Qt.CTRL + QtCore.Qt.Key_R, self.tx_list)
+        shortcut.activated.connect(self.send_to_repeater)
+
+        # Recursion guards
         self._updating_req = False
         self._updating_resp = False
 
-        # Connect text changed for request editors
+        # Connect request/response editor signals
         self.req_text.textChanged.connect(self._req_text_changed)
         self.req_hex.textChanged.connect(self._req_hex_changed)
-
-        # Connect selection changed for request editors
         self.req_text.cursorPositionChanged.connect(self._req_text_selection_changed)
         self.req_hex.cursorPositionChanged.connect(self._req_hex_selection_changed)
-
-        # Connect text changed for response editors
         self.resp_text.textChanged.connect(self._resp_text_changed)
         self.resp_hex.textChanged.connect(self._resp_hex_changed)
-
-        # Connect selection changed for response editors
         self.resp_text.cursorPositionChanged.connect(self._resp_text_selection_changed)
         self.resp_hex.cursorPositionChanged.connect(self._resp_hex_selection_changed)
 
-        self.sort_asc = False  # descending by default
-
-        # Setup button and connect
+        # Sorting
+        self.sort_asc = False
         self.sort_btn = QtWidgets.QPushButton("Sort ASC")
         self.sort_btn.clicked.connect(self.toggle_sort)
         topbar.addWidget(self.sort_btn)
+        
+        # Send to Repeater on TX List
+        self.tx_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.tx_list.customContextMenuRequested.connect(self.proxy_list_context_menu)
+
+        # Send to Repeater on Raw HTTP Request
+        self.req_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.req_text.customContextMenuRequested.connect(self.show_req_context_menu)
+
+
+    def show_req_context_menu(self, pos):
+        menu = self.req_text.createStandardContextMenu()
+        menu.addSeparator()
+        send_action = menu.addAction("Send to Repeater")
+
+        action = menu.exec_(self.req_text.mapToGlobal(pos))
+        if action == send_action:
+            self.send_to_repeater()
+
+
+    def proxy_list_context_menu(self, pos):
+        menu = QtWidgets.QMenu()
+        send_action = menu.addAction("Send to Repeater")
+        action = menu.exec_(self.tx_list.mapToGlobal(pos))
+        if action == send_action:
+            self.send_to_repeater()
+
+
+    # ---------------- Send to Repeater ----------------
+    def send_to_repeater(self):
+        item = self.tx_list.currentItem()
+        if not item:
+            return
+        txid = int(item.text().split()[0][1:])
+        tx = self.transactions.get(txid)
+        if not tx:
+            return
+        # self.main_tab.setCurrentWidget(self.repeater_widget)
+        self.repeater_widget.add_repeater_tab(tx.host, tx.port, tx.request_raw)
+
 
     def toggle_sort(self):
         self.sort_asc = not self.sort_asc
