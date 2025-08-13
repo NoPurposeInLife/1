@@ -316,37 +316,13 @@ class ProxyWorker(threading.Thread):
         """
         import ssl
 
-        # Create bare TCP first
-        upstream_raw = socket.create_connection((host, port), timeout=6)
 
-        try:
-            ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            # trust our CA first
-            ctx.load_verify_locations(cadata=self.ca.ca_cert_pem.decode('utf-8'))
-            # SNI only for hostnames (not IPs)
-            try:
-                ipaddress.ip_address(host)
-                is_ip = True
-            except ValueError:
-                is_ip = False
-
-            ctx.check_hostname = not is_ip
-            server_hostname = None if is_ip else host
-            upstream = ctx.wrap_socket(upstream_raw, server_hostname=server_hostname)
-            return upstream
-        except Exception as e:
-            # fallback: no-verify
-            try:
-                upstream_raw.close()
-            except:
-                pass
-
-            upstream_raw2 = socket.create_connection((host, port), timeout=6)
-            ctx2 = ssl.create_default_context()
-            ctx2.check_hostname = False
-            ctx2.verify_mode = ssl.CERT_NONE
-            upstream = ctx2.wrap_socket(upstream_raw2, server_hostname=None)
-            return upstream
+        upstream_raw2 = socket.create_connection((host, port), timeout=6)
+        ctx2 = ssl.create_default_context()
+        ctx2.check_hostname = False
+        ctx2.verify_mode = ssl.CERT_NONE
+        upstream = ctx2.wrap_socket(upstream_raw2, server_hostname=None)
+        return upstream
 
     def handle(self):
         client = self.client_sock
