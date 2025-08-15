@@ -49,6 +49,8 @@ port_s = None
 
 
 global inject
+global inject_search_input
+global inject_payload_input
 
 # -----------------------
 # Utilities (hex/text)
@@ -363,12 +365,15 @@ class ProxyWorker(threading.Thread):
             
         # payload = b"DEAD'; WAIT FOR DELAY '0:0:10';-- -"
         # payload = b"REPLACEME123"
-        payload = "REPLACEME12345".encode('utf-8')
+        # payload = "REPLACEME12345".encode('utf-8')
         # payload = b"REPLACEME123"
+        
+        search = self.inject_search_input.text().encode()
+        payload = self.inject_payload_input.text().encode()
+        
         payload_len = len(payload)
 
         data = bytearray(tx_request_raw)  # work on bytes
-        search = b"REPLACEME123"
         pos = 0
         while True:
             idx = data.find(search, pos)
@@ -1126,7 +1131,28 @@ class ProxyGUI(QtWidgets.QMainWindow):
         req_controls.addWidget(self.req_forward_btn)
         req_layout.addLayout(req_controls)
 
-        req_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        global inject_search_input
+        global inject_payload_input
+        
+        # Add inject input fields
+        inject_layout = QtWidgets.QFormLayout()
+        self.inject_search_input = QtWidgets.QLineEdit()
+        self.inject_search_input.setPlaceholderText("Inject Search")
+        self.inject_search_input.setText("REPLACEME123")
+        self.inject_payload_input = QtWidgets.QLineEdit()
+        self.inject_payload_input.setPlaceholderText("Inject Payload")
+        self.inject_payload_input.setText("REPLACEME123")
+        inject_layout.addRow("Search:", self.inject_search_input)
+        inject_layout.addRow("Payload:", self.inject_payload_input)
+
+        # Add this layout above the request editor
+        inject_widget = QtWidgets.QWidget()
+        inject_widget.setLayout(inject_layout)
+
+        # Add inject inputs **below controls, above editors**
+        req_layout.addWidget(inject_widget)
+
+        # req_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
 
         # Request editor
         self.req_text = QtWidgets.QPlainTextEdit()
@@ -1147,6 +1173,11 @@ class ProxyGUI(QtWidgets.QMainWindow):
         splitter_inner = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter_inner.addWidget(req_splitter_top)
         splitter_inner.addWidget(req_splitter_bottom)
+
+        splitter_inner.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        req_splitter_top.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        req_splitter_bottom.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
 
         req_layout.addWidget(splitter_inner)
         self.tab.addTab(self.req_widget, "Request")
