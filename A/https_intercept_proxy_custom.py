@@ -356,7 +356,7 @@ class ProxyWorker(threading.Thread):
         # payload = b"DEAD'; WAIT FOR DELAY '0:0:10';-- -"
         # payload = b"REPLACEME123"
         # payload = b"REPLACEME12345"
-        payload = b"REPLACEME12345"
+        payload = b"REPLACEME123"
         payload_len = len(payload)
 
         data = bytearray(tx_request_raw)  # work on bytes
