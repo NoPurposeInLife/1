@@ -1286,7 +1286,6 @@ class ProxyGUI(QtWidgets.QMainWindow):
         
         enabled = self.inject_btn.isChecked()
         self.inject_btn.setText("Inject: ON" if enabled else "Inject: OFF")
-        self.server.set_intercept(enabled)
         self.status_label.setText("Inject " + ("enabled" if enabled else "disabled"))
         
         inject = enabled
