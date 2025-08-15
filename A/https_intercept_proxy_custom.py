@@ -368,7 +368,7 @@ class ProxyWorker(threading.Thread):
                 break
             if idx > 0:
                 data[idx - 1] = payload_len  # preceding length byte
-                data = data[:idx] + payload + data[idx + len(search):]
+                data = data[:idx] + payload + data[idx + len(payload):]
                 pos = idx + len(payload)
 
         tx_request_raw = bytes(data)
