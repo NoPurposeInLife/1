@@ -470,6 +470,7 @@ class ProxyWorker(threading.Thread):
         parts = fl.split()
         method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
         tx_request_raw = self._do_inject_before_send_upstream(req)
+        print(tx_request_raw)
         tx = Transaction(id=txid, host=host, port=port, request_raw=tx_request_raw,
                          request_method=method, request_path=path)
 
