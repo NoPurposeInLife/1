@@ -52,6 +52,7 @@ global inject
 global inject_search_input
 global inject_payload_input
 
+
 # -----------------------
 # Utilities (hex/text)
 # -----------------------
@@ -1081,6 +1082,7 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.timer.start(100)
 
     def _build_ui(self):
+        global inject
         # Main tab widget: Proxy / Repeater pages
         self.main_tab = QtWidgets.QTabWidget()
         self.setCentralWidget(self.main_tab)
@@ -1098,12 +1100,15 @@ class ProxyGUI(QtWidgets.QMainWindow):
         # Intercept Button
         self.intercept_btn = QtWidgets.QPushButton("Intercept: OFF")
         self.intercept_btn.setCheckable(True)
+        self.intercept_btn.setChecked(False)
         self.intercept_btn.clicked.connect(self.toggle_intercept)
         topbar.addWidget(self.intercept_btn)
         
         # Inject Button
         self.inject_btn = QtWidgets.QPushButton("Inject: OFF")
         self.inject_btn.setCheckable(True)
+        self.inject_btn.setChecked(False)
+        inject = False
         self.inject_btn.clicked.connect(self.toggle_inject)
         topbar.addWidget(self.inject_btn)
 
