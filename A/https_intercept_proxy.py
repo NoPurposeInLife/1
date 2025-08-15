@@ -368,8 +368,8 @@ class ProxyWorker(threading.Thread):
         # payload = "REPLACEME12345".encode('utf-8')
         # payload = b"REPLACEME123"
         
-        search = self.inject_search_input.text().encode()
-        payload = self.inject_payload_input.text().encode()
+        search = inject_search_input.text().encode()
+        payload = inject_payload_input.text().encode()
         
         payload_len = len(payload)
 
