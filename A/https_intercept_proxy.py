@@ -50,7 +50,7 @@ port_s = None
 # -----------------------
 # Utilities (hex/text)
 # -----------------------
-"""
+
 def bytes_to_hex_view(b: bytes) -> str:
     hexstr = b.hex()
     pairs = [hexstr[i:i+2] for i in range(0, len(hexstr), 2)]
@@ -58,9 +58,11 @@ def bytes_to_hex_view(b: bytes) -> str:
     for i in range(0, len(pairs), 16):
         lines.append(" ".join(pairs[i:i+16]))
     return "\n".join(lines)
-"""
+
+""'
 def bytes_to_hex_view(b: bytes) -> str:
     return " ".join(f"{x:02x}" for x in b)
+"""
 
 def hex_view_to_bytes(s: str) -> bytes:
     cleaned = re.sub(r'[^0-9a-fA-F]', '', s)
