@@ -59,7 +59,7 @@ def bytes_to_hex_view(b: bytes) -> str:
         lines.append(" ".join(pairs[i:i+16]))
     return "\n".join(lines)
 
-""'
+"""
 def bytes_to_hex_view(b: bytes) -> str:
     return " ".join(f"{x:02x}" for x in b)
 """
