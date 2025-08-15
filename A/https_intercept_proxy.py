@@ -655,7 +655,7 @@ class RepeaterWidget(QtWidgets.QWidget):
         host_edit = QtWidgets.QLineEdit(host)
         port_edit = QtWidgets.QLineEdit(str(port))
         send_btn = QtWidgets.QPushButton("Send")
-        send_btn.clicked.connect(lambda: self.send_repeater_request(host_edit, port_edit, req_text, resp_text))
+        send_btn.clicked.connect(lambda: self.send_repeater_request(host_edit, port_edit, self.req_text, self.resp_text))
         host_port_layout.addWidget(QtWidgets.QLabel("Host:"))
         host_port_layout.addWidget(host_edit)
         host_port_layout.addWidget(QtWidgets.QLabel("Port:"))
@@ -664,46 +664,96 @@ class RepeaterWidget(QtWidgets.QWidget):
         repeater_layout.addLayout(host_port_layout)
 
         # Request editor + search bar
-        req_text = QtWidgets.QPlainTextEdit()
-        req_text.setFont(QtGui.QFont("Consolas", 10))
-        req_text.setPlainText(req_data.decode(errors="replace") if isinstance(req_data, bytes) else req_data)
-        repeater_layout.addWidget(req_text)
-        repeater_layout.addLayout(self._make_search_bar(req_text))  # Search under request
+        self.req_text = QtWidgets.QPlainTextEdit()
+        self.req_text.setFont(QtGui.QFont("Consolas", 10))
+        self.req_text.setPlainText(req_data.decode(errors="replace") if isinstance(req_data, bytes) else req_data)
+        self.req_hex = QtWidgets.QPlainTextEdit()
+        self.req_hex.setFont(QtGui.QFont("Consolas", 10))
+        self.req_hex.setPlainText(bytes_to_hex_view(req_data))
+
+        
+        req_splitter_top = QtWidgets.QWidget()
+        req_splitter_top_layout = QtWidgets.QVBoxLayout(req_splitter_top)
+        req_splitter_top_layout.addWidget(self.req_text)
+        req_splitter_top_layout.addLayout(self._make_search_bar(self.req_text))
+
+        req_splitter_bottom = QtWidgets.QWidget()
+        req_splitter_bottom_layout = QtWidgets.QVBoxLayout(req_splitter_bottom)
+        req_splitter_bottom_layout.addWidget(self.req_hex)
+        req_splitter_bottom_layout.addLayout(self._make_search_bar(self.req_hex))
+
+        splitter_inner = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter_inner.addWidget(req_splitter_top)
+        splitter_inner.addWidget(req_splitter_bottom)
+
+        repeater_layout.addWidget(splitter_inner)
 
         # Response editor + search bar
-        resp_text = QtWidgets.QPlainTextEdit()
-        resp_text.setFont(QtGui.QFont("Consolas", 10))
-        resp_text.setReadOnly(True)
-        repeater_layout.addWidget(resp_text)
-        repeater_layout.addLayout(self._make_search_bar(resp_text))  # Search under response
+        self.resp_text = QtWidgets.QPlainTextEdit()
+        self.resp_text.setFont(QtGui.QFont("Consolas", 10))
+        self.resp_text.setReadOnly(True)
+        self.resp_hex = QtWidgets.QPlainTextEdit()
+        self.resp_hex.setFont(QtGui.QFont("Consolas", 10))
+        
+        resp_splitter_top = QtWidgets.QWidget()
+        resp_splitter_top_layout = QtWidgets.QVBoxLayout(resp_splitter_top)
+        resp_splitter_top_layout.addWidget(self.resp_text)
+        resp_splitter_top_layout.addLayout(self._make_search_bar(self.resp_text))
+
+        resp_splitter_bottom = QtWidgets.QWidget()
+        resp_splitter_bottom_layout = QtWidgets.QVBoxLayout(resp_splitter_bottom)
+        resp_splitter_bottom_layout.addWidget(self.resp_hex)
+        resp_splitter_bottom_layout.addLayout(self._make_search_bar(self.resp_hex))
+
+        splitter_inner = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter_inner.addWidget(resp_splitter_top)
+        splitter_inner.addWidget(resp_splitter_bottom)
+
+        repeater_layout.addWidget(splitter_inner)
 
         # Keyboard shortcut CTRL+R for resend
-        shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+R"), req_text)
+        shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+R"), self.req_text)
         shortcut.activated.connect(lambda: self.add_repeater_tab(
             host_edit.text(),
             port_edit.text(),
-            req_text.toPlainText(),
+            self.req_text.toPlainText().encode(),
             make_active=True
         ))
 
+        
+        # Recursion guards
+        self._updating_req = False
+        self._updating_resp = False
+
+        # Connect request/response editor signals
+        self.req_text.textChanged.connect(self._req_text_changed)
+        self.req_hex.textChanged.connect(self._req_hex_changed)
+        self.req_text.cursorPositionChanged.connect(self._req_text_selection_changed)
+        self.req_hex.cursorPositionChanged.connect(self._req_hex_selection_changed)
+        self.resp_text.textChanged.connect(self._resp_text_changed)
+        self.resp_hex.textChanged.connect(self._resp_hex_changed)
+        self.resp_text.cursorPositionChanged.connect(self._resp_text_selection_changed)
+        self.resp_hex.cursorPositionChanged.connect(self._resp_hex_selection_changed)
+        
 
         # Context menu "Send to Repeater"
-        req_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.req_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        
         def repeater_context_menu(pos):
             menu = req_text.createStandardContextMenu()
             action = menu.addAction("Send to Repeater")
-            action.triggered.connect(lambda: self.add_repeater_tab(host_edit.text(), port_edit.text(), req_text.toPlainText()))
-            menu.exec_(req_text.mapToGlobal(pos))
-        req_text.customContextMenuRequested.connect(repeater_context_menu)
+            action.triggered.connect(lambda: self.add_repeater_tab(host_edit.text(), port_edit.text(), self.req_text.toPlainText()))
+            menu.exec_(self.req_text.mapToGlobal(pos))
+        self.req_text.customContextMenuRequested.connect(repeater_context_menu)
 
         # Keyboard shortcut CTRL+Enter for resend (works when request editor is focused)
-        send_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+Return"), req_text)
+        send_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self.req_text)
         send_shortcut.activated.connect(
             lambda: self.send_repeater_request(
                 host_edit,
                 port_edit,
-                req_text,
-                resp_text
+                self.req_text,
+                self.resp_text
             )
         )
 
@@ -712,6 +762,160 @@ class RepeaterWidget(QtWidgets.QWidget):
         if make_active:
             self.repeater_tabs.setCurrentIndex(idx)
         return idx
+
+    def _req_text_selection_changed(self):
+        if self._updating_req:
+            return
+        self._updating_req = True
+        try:
+            cursor = self.req_text.textCursor()
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+
+            # Map raw text selection to hex view positions:
+            # Each byte => 3 characters in hex view ("XX ")
+            # So hex_start = start * 3, hex_end = end * 3 - 1 (because last byte no trailing space)
+            hex_start = start * 3
+            hex_end = end * 3 - 1
+
+            hex_cursor = self.req_hex.textCursor()
+            if hex_start >= 0:
+                hex_cursor.setPosition(hex_start)
+            if hex_end >= 0:
+                hex_cursor.setPosition(hex_end, QtGui.QTextCursor.KeepAnchor)
+            self.req_hex.setTextCursor(hex_cursor)
+        finally:
+            self._updating_req = False
+
+    def _req_hex_selection_changed(self):
+        if self._updating_req:
+            return
+        self._updating_req = True
+        try:
+            cursor = self.req_hex.textCursor()
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+
+            # Map hex selection back to raw text:
+            # Each byte is represented by 2 hex chars plus 1 space, so every 3 chars
+            # Ignore spaces/newlines; count how many hex bytes before start
+            hex_text = self.req_hex.toPlainText()
+            # Count how many valid hex digits before start
+            valid_pos = 0
+            byte_start = 0
+            byte_end = 0
+            count = 0
+            for i, c in enumerate(hex_text):
+                if c in "0123456789abcdefABCDEF":
+                    count += 1
+                if count // 2 == 0 and i >= start:
+                    byte_start = 0
+                    break
+                if count // 2 == (start // 3):
+                    byte_start = count // 2
+                if i >= start:
+                    break
+            # Rough estimate: use start//3 and end//3 for byte indexes
+            raw_start = start // 3
+            raw_end = max(end // 3, raw_start)
+
+            raw_cursor = self.req_text.textCursor()
+            if raw_start >= 0:
+                raw_cursor.setPosition(raw_start)
+            if raw_end >= 0:
+                raw_cursor.setPosition(raw_end, QtGui.QTextCursor.KeepAnchor)
+            self.req_text.setTextCursor(raw_cursor)
+        finally:
+            self._updating_req = False
+
+    def _resp_text_selection_changed(self):
+        if self._updating_resp:
+            return
+        self._updating_resp = True
+        try:
+            cursor = self.resp_text.textCursor()
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+
+            hex_start = start * 3
+            hex_end = end * 3 - 1
+
+            hex_cursor = self.resp_hex.textCursor()
+            if hex_start >= 0:
+                hex_cursor.setPosition(hex_start)
+            if hex_end >= 0:
+                hex_cursor.setPosition(hex_end, QtGui.QTextCursor.KeepAnchor)
+            self.resp_hex.setTextCursor(hex_cursor)
+        finally:
+            self._updating_resp = False
+
+    def _resp_hex_selection_changed(self):
+        if self._updating_resp:
+            return
+        self._updating_resp = True
+        try:
+            cursor = self.resp_hex.textCursor()
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+
+            raw_start = start // 3
+            raw_end = max(end // 3, raw_start)
+
+            raw_cursor = self.resp_text.textCursor()
+            
+            if raw_start >= 0:
+                raw_cursor.setPosition(raw_start)
+            
+            if raw_end >= 0:
+                raw_cursor.setPosition(raw_end, QtGui.QTextCursor.KeepAnchor)
+            self.resp_text.setTextCursor(raw_cursor)
+        finally:
+            self._updating_resp = False
+
+
+    def _req_text_changed(self):
+        if self._updating_req:
+            return
+        self._updating_req = True
+        try:
+            self.req_hex.setPlainText(bytes_to_hex_view(self.req_text.toPlainText().encode()))
+        finally:
+            self._updating_req = False
+
+    def _req_hex_changed(self):
+        if self._updating_req:
+            return
+        self._updating_req = True
+        try:
+            try:
+                b = hex_view_to_bytes(self.req_hex.toPlainText())
+                self.req_text.setPlainText(b.decode(errors="replace"))
+            except Exception:
+                pass
+        finally:
+            self._updating_req = False
+
+    def _resp_text_changed(self):
+        if self._updating_resp:
+            return
+        self._updating_resp = True
+        try:
+            self.resp_hex.setPlainText(bytes_to_hex_view(self.resp_text.toPlainText().encode()))
+        finally:
+            self._updating_resp = False
+
+    def _resp_hex_changed(self):
+        if self._updating_resp:
+            return
+        self._updating_resp = True
+        try:
+            try:
+                b = hex_view_to_bytes(self.resp_hex.toPlainText())
+                self.resp_text.setPlainText(b.decode(errors="replace"))
+            except Exception:
+                pass
+        finally:
+            self._updating_resp = False
 
     # ---------- internals ----------
     def _make_search_bar(self, editor: QtWidgets.QPlainTextEdit) -> QtWidgets.QHBoxLayout:
@@ -989,6 +1193,9 @@ class ProxyGUI(QtWidgets.QMainWindow):
         # Send to Repeater on Raw HTTP Request
         self.req_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.req_text.customContextMenuRequested.connect(self.show_req_context_menu)
+        
+        # Add Empty Repeater
+        self.repeater_widget.add_repeater_tab("localhost", 443, "".encode(), make_active=False)
 
     def clear_transactions(self):
         """Clear all transactions from the list and internal storage."""
