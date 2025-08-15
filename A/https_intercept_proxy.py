@@ -47,6 +47,9 @@ import ipaddress
 host = None
 port_s = None
 
+
+global inject
+
 # -----------------------
 # Utilities (hex/text)
 # -----------------------
