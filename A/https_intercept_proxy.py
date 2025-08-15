@@ -50,6 +50,7 @@ port_s = None
 # -----------------------
 # Utilities (hex/text)
 # -----------------------
+"""
 def bytes_to_hex_view(b: bytes) -> str:
     hexstr = b.hex()
     pairs = [hexstr[i:i+2] for i in range(0, len(hexstr), 2)]
@@ -57,6 +58,9 @@ def bytes_to_hex_view(b: bytes) -> str:
     for i in range(0, len(pairs), 16):
         lines.append(" ".join(pairs[i:i+16]))
     return "\n".join(lines)
+"""
+def bytes_to_hex_view(b: bytes) -> str:
+    return " ".join(f"{x:02x}" for x in b)
 
 def hex_view_to_bytes(s: str) -> bytes:
     cleaned = re.sub(r'[^0-9a-fA-F]', '', s)
@@ -348,6 +352,31 @@ class ProxyWorker(threading.Thread):
             upstream = ctx2.wrap_socket(upstream_raw2, server_hostname=None)
             return upstream
 
+    def _do_inject_before_send_upstream(self, tx_request_raw):
+        if not inject:
+            return tx_request_raw
+            
+        # payload = b"DEAD'; WAIT FOR DELAY '0:0:10';-- -"
+        # payload = b"REPLACEME123"
+        payload = b"REPLACEME12345"
+        # payload = b"REPLACEME123"
+        payload_len = len(payload)
+
+        data = bytearray(tx_request_raw)  # work on bytes
+        search = b"REPLACEME123"
+        pos = 0
+        while True:
+            idx = data.find(search, pos)
+            if idx == -1:
+                break
+            if idx > 0:
+                data[idx - 1] = payload_len  # preceding length byte
+                data = data[:idx] + payload + data[idx + len(payload):]
+                pos = idx + len(payload)
+
+        tx_request_raw = bytes(data)
+        return tx_request_raw
+
     def handle(self):
         client = self.client_sock
 
@@ -449,7 +478,8 @@ class ProxyWorker(threading.Thread):
         fl = req.split(b'\r\n', 1)[0].decode(errors='ignore')
         parts = fl.split()
         method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
-        tx = Transaction(id=txid, host=host, port=port, request_raw=req,
+        tx_request_raw = self._do_inject_before_send_upstream(req)
+        tx = Transaction(id=txid, host=host, port=port, request_raw=tx_request_raw,
                          request_method=method, request_path=path)
 
         self.gui_queue.put(("new_tx", tx))
@@ -462,7 +492,7 @@ class ProxyWorker(threading.Thread):
             tx.request_event.wait()
 
         # Send upstream
-        upstream.sendall(tx.request_raw)
+        upstream.sendall(tx_request_raw)
 
         # Read response
         resp = recv_http_message(upstream)
@@ -512,7 +542,8 @@ class ProxyWorker(threading.Thread):
             parts = fl.split()
             method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
 
-            tx = Transaction(id=txid, host=host, port=port, request_raw=req,
+            tx_request_raw = self._do_inject_before_send_upstream(req)
+            tx = Transaction(id=txid, host=host, port=port, request_raw=tx_request_raw,
                              request_method=method, request_path=path)
             self.gui_queue.put(("new_tx", tx))
 
@@ -523,7 +554,7 @@ class ProxyWorker(threading.Thread):
                 tx.request_event.wait()
 
             try:
-                upstream.sendall(tx.request_raw)
+                upstream.sendall(tx_request_raw)
             except Exception:
                 break
 
@@ -1053,10 +1084,19 @@ class ProxyGUI(QtWidgets.QMainWindow):
         # Left: Transaction list
         left = QtWidgets.QVBoxLayout()
         topbar = QtWidgets.QHBoxLayout()
+        
+        # Intercept Button
         self.intercept_btn = QtWidgets.QPushButton("Intercept: OFF")
         self.intercept_btn.setCheckable(True)
         self.intercept_btn.clicked.connect(self.toggle_intercept)
         topbar.addWidget(self.intercept_btn)
+        
+        # Inject Button
+        self.inject_btn = QtWidgets.QPushButton("Inject: OFF")
+        self.inject_btn.setCheckable(True)
+        self.inject_btn.clicked.connect(self.toggle_inject)
+        topbar.addWidget(self.inject_btn)
+
         topbar.addStretch()
         left.addLayout(topbar)
 
@@ -1238,6 +1278,16 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.sort_asc = not self.sort_asc
         self.sort_btn.setText("Sort ASC" if self.sort_asc else "Sort DESC")
         self._resort_tx_list()
+
+    def toggle_inject(self):
+        global inject
+        
+        enabled = self.inject_btn.isChecked()
+        self.inject_btn.setText("Inject: ON" if enabled else "Inject: OFF")
+        self.server.set_intercept(enabled)
+        self.status_label.setText("Inject " + ("enabled" if enabled else "disabled"))
+        
+        inject = enabled
 
     def _resort_tx_list(self):
         self.tx_list.clear()
