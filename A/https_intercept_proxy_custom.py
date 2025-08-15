@@ -355,8 +355,8 @@ class ProxyWorker(threading.Thread):
     def _do_inject_before_send_upstream(self, tx_request_raw):
         # payload = b"DEAD'; WAIT FOR DELAY '0:0:10';-- -"
         # payload = b"REPLACEME123"
-        # payload = b"REPLACEME12345"
-        payload = b"REPLACEME123"
+        payload = b"REPLACEME12345"
+        # payload = b"REPLACEME123"
         payload_len = len(payload)
 
         data = bytearray(tx_request_raw)  # work on bytes
@@ -368,8 +368,8 @@ class ProxyWorker(threading.Thread):
                 break
             if idx > 0:
                 data[idx - 1] = payload_len  # preceding length byte
-            data = data[:idx] + payload + data[idx + len(search):]
-            pos = idx + len(payload)
+                data = data[:idx] + payload + data[idx + len(search):]
+                pos = idx + len(payload)
 
         tx_request_raw = bytes(data)
         return tx_request_raw
