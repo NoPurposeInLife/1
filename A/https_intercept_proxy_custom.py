@@ -482,7 +482,7 @@ class ProxyWorker(threading.Thread):
             tx.request_event.wait()
 
         # Send upstream
-        tx_request_raw = _do_inject_before_send_upstream(tx.request_raw)
+        tx_request_raw = self._do_inject_before_send_upstream(tx.request_raw)
         upstream.sendall(tx_request_raw)
 
         # Read response
@@ -544,7 +544,7 @@ class ProxyWorker(threading.Thread):
                 tx.request_event.wait()
 
             try:
-                tx_request_raw = _do_inject_before_send_upstream(tx.request_raw)
+                tx_request_raw = self._do_inject_before_send_upstream(tx.request_raw)
                 upstream.sendall(tx_request_raw)
             except Exception:
                 break
