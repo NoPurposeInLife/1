@@ -977,6 +977,11 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.sort_btn.clicked.connect(self.toggle_sort)
         topbar.addWidget(self.sort_btn)
         
+        # Clear Transactions
+        self.clear_btn = QtWidgets.QPushButton("Clear Transactions")
+        self.clear_btn.clicked.connect(self.clear_transactions)
+        topbar.addWidget(self.clear_btn)
+
         # Send to Repeater on TX List
         self.tx_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.tx_list.customContextMenuRequested.connect(self.proxy_list_context_menu)
@@ -985,7 +990,12 @@ class ProxyGUI(QtWidgets.QMainWindow):
         self.req_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.req_text.customContextMenuRequested.connect(self.show_req_context_menu)
 
-
+    def clear_transactions(self):
+        """Clear all transactions from the list and internal storage."""
+        self.tx_list.clear()
+        self.transactions.clear()
+        self.status_label.setText("Transactions cleared")
+        
     def show_req_context_menu(self, pos):
         menu = self.req_text.createStandardContextMenu()
         menu.addSeparator()
