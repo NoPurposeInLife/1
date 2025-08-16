@@ -412,11 +412,14 @@ class ProxyWorker(threading.Thread):
         # Update Content-Length if present
         headers_end = data.find(b"\r\n\r\n")
         if headers_end != -1:
-            headers = data[:headers_end].decode(errors='ignore')
-            body = data[headers_end+4:]
-            new_length = str(len(body))
-            headers = re.sub(r"(?i)(Content-Length:\s*)\d+", r"\1" + new_length, headers)
-            data = headers.encode() + b"\r\n\r\n" + body
+            headers = data[:headers_end]
+            body = data[headers_end + 4:]
+            new_length = str(len(body)).encode()  # keep as bytes
+
+            # Use \g<1> for proper backreference
+            headers = re.sub(rb"(Content-Length:\s*)\d+", rb"\g<1>" + new_length, headers, flags=re.IGNORECASE)
+
+            data = headers + b"\r\n\r\n" + body
 
         return bytes(data)
 
