@@ -360,6 +360,7 @@ class ProxyWorker(threading.Thread):
             upstream = ctx2.wrap_socket(upstream_raw2, server_hostname=None)
             return upstream
 
+    """
     def _do_inject_before_send_upstream(self, tx_request_raw):
         if not inject:
             return tx_request_raw
@@ -387,6 +388,38 @@ class ProxyWorker(threading.Thread):
 
         tx_request_raw = bytes(data)
         return tx_request_raw
+    """
+
+    def _do_inject_before_send_upstream(self, tx_request_raw):
+        if not inject:
+            return tx_request_raw
+
+        search = inject_search_input.text().encode()
+        payload = inject_payload_input.text().encode()
+        payload_len = len(payload)
+
+        data = bytearray(tx_request_raw)
+        pos = 0
+        while True:
+            idx = data.find(search, pos)
+            if idx == -1:
+                break
+            if idx > 0:
+                data[idx - 1] = payload_len
+            data = data[:idx] + payload + data[idx + len(search):]
+            pos = idx + len(payload)
+
+        # Update Content-Length if present
+        headers_end = data.find(b"\r\n\r\n")
+        if headers_end != -1:
+            headers = data[:headers_end].decode(errors='ignore')
+            body = data[headers_end+4:]
+            new_length = str(len(body))
+            headers = re.sub(r"(?i)(Content-Length:\s*)\d+", r"\1" + new_length, headers)
+            data = headers.encode() + b"\r\n\r\n" + body
+
+        return bytes(data)
+
 
     def handle(self):
         client = self.client_sock
