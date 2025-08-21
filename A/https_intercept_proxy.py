@@ -390,6 +390,39 @@ class ProxyWorker(threading.Thread):
         return tx_request_raw
     """
 
+    def _do_inject_before_send_downstream(self, resp):
+        #if not inject:
+        #    return resp
+
+        search = b"\x40\x06\x52\x6f\x6c\x65\x42\x45\x3f\x02\x49\x64\x8a\x62\x10\x40"
+        payload = b"\x40\x06\x52\x6f\x6c\x65\x42\x45\x3f\x02\x49\x64\x8a\x2d\x06\x40"
+        payload_len = len(payload)
+
+        data = bytearray(resp)
+        pos = 0
+        while True:
+            idx = data.find(search, pos)
+            if idx == -1:
+                break
+            if idx > 0:
+                data[idx - 1] = payload_len
+            data = data[:idx] + payload + data[idx + len(search):]
+            pos = idx + len(payload)
+
+        # Update Content-Length if present
+        headers_end = data.find(b"\r\n\r\n")
+        if headers_end != -1:
+            headers = data[:headers_end]
+            body = data[headers_end + 4:]
+            new_length = str(len(body)).encode()  # keep as bytes
+
+            # Use \g<1> for proper backreference
+            headers = re.sub(rb"(Content-Length:\s*)\d+", rb"\g<1>" + new_length, headers, flags=re.IGNORECASE)
+
+            data = headers + b"\r\n\r\n" + body
+        
+        return bytes(data) 
+    
     def _do_inject_before_send_upstream(self, tx_request_raw):
         if not inject:
             return tx_request_raw
@@ -420,7 +453,7 @@ class ProxyWorker(threading.Thread):
             headers = re.sub(rb"(Content-Length:\s*)\d+", rb"\g<1>" + new_length, headers, flags=re.IGNORECASE)
 
             data = headers + b"\r\n\r\n" + body
-
+        
         return bytes(data)
 
 
@@ -543,7 +576,8 @@ class ProxyWorker(threading.Thread):
 
         # Read response
         resp = recv_http_message(upstream)
-        tx.response_raw = resp
+        tx.response_raw = self._do_inject_before_send_downstream(resp)
+        # tx.response_raw = resp
         tx.response_ready = True
 
         if self.intercept_flag.is_set():
