@@ -393,9 +393,11 @@ class ProxyWorker(threading.Thread):
     def _do_inject_before_send_downstream(self, resp):
         #if not inject:
         #    return resp
-
+        
         search = b"\x40\x06\x52\x6f\x6c\x65\x42\x45\x3f\x02\x49\x64\x8a\x62\x10\x40"
         payload = b"\x40\x06\x52\x6f\x6c\x65\x42\x45\x3f\x02\x49\x64\x8a\x2d\x06\x40"
+        #search = b"TEST"
+        #payload = b"TEST12345"
         payload_len = len(payload)
 
         data = bytearray(resp)
@@ -644,7 +646,8 @@ class ProxyWorker(threading.Thread):
             except Exception:
                 break
 
-            tx.response_raw = resp
+            #tx.response_raw = resp
+            tx.response_raw = self._do_inject_before_send_downstream(resp)
             tx.response_ready = True
 
             if self.intercept_flag.is_set():
