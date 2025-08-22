@@ -1221,7 +1221,7 @@ class ProxyGUI(QtWidgets.QMainWindow):
         inject_search_input = self.inject_search_input
         self.inject_payload_input = QtWidgets.QLineEdit()
         self.inject_payload_input.setPlaceholderText("Inject Payload")
-        self.inject_payload_input.setText("REPLACEME123")
+        self.inject_payload_input.setText("'; WAITFOR DELAY '0:0:10';-- -")
         inject_payload_input = self.inject_payload_input
         inject_layout.addRow("Search:", self.inject_search_input)
         inject_layout.addRow("Payload:", self.inject_payload_input)
