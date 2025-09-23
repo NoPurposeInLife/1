@@ -53,5 +53,5 @@ sudo stunnel /etc/stunnel/apt-tls12.conf
 
 
 Then tell apt to use it:
-
+# nano /etc/apt/apt.conf.d/99forcetls12
 Acquire::https::Proxy "http://127.0.0.1:8443/";
