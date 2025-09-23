@@ -4,7 +4,7 @@ sudo cp customCA.crt /usr/local/share/ca-certificates/
 sudo update-ca-certificates
 
 
-
+# SslForceVersion IS NOT SUPPORTED ANYMORE
 sudo tee /etc/apt/apt.conf.d/99forcetls12 >/dev/null <<'EOF'
 Acquire::https::CaInfo "/etc/ssl/certs/ca-certificates.crt";
 Acquire::https::SslForceVersion "TLSv1.2";
@@ -12,3 +12,16 @@ EOF
 
 
 curl -v --tlsv1.2 --tls-max 1.2 https://google.com
+
+
+sudo nano /etc/ssl/openssl.cnf
+At the bottom, add (or edit existing [system_default_sect]):
+
+
+[system_default_sect]
+MinProtocol = TLSv1.2
+MaxProtocol = TLSv1.2
+Save and exit, then refresh dynamic configs:
+
+
+sudo update-ca-certificates
