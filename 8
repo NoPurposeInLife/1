@@ -25,3 +25,33 @@ Save and exit, then refresh dynamic configs:
 
 
 sudo update-ca-certificates
+
+
+4. Quick test with stunnel (cleanest way without recompiling)
+
+Install stunnel:
+
+sudo apt-get install stunnel4
+
+
+Create /etc/stunnel/apt-tls12.conf:
+
+client = yes
+[apt-tls12]
+accept = 127.0.0.1:8443
+connect = deb.debian.org:443
+options = NO_SSLv2
+options = NO_SSLv3
+options = NO_TLSv1
+options = NO_TLSv1.1
+options = NO_TLSv1.3
+
+
+Run:
+
+sudo stunnel /etc/stunnel/apt-tls12.conf
+
+
+Then tell apt to use it:
+
+Acquire::https::Proxy "http://127.0.0.1:8443/";
