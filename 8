@@ -36,15 +36,29 @@ sudo apt-get install stunnel4
 
 Create /etc/stunnel/apt-tls12.conf:
 
+# /etc/stunnel/tls12-proxy.conf
+pid = /var/run/stunnel-tls12.pid
+foreground = no
+debug = 2
+output = /var/log/stunnel-tls12.log
+
+# global: enforce TLS 1.2 only
+# Either of these is fine; use one your stunnel supports:
+# 1) explicit single-version:
+sslVersion = TLSv1.2
+# 2) or use min/max (if supported):
+# sslVersionMin = TLSv1.2
+# sslVersionMax = TLSv1.2
+
+# service block: act as an HTTP proxy target for local apps
+[tls12-proxy]
 client = yes
-[apt-tls12]
 accept = 127.0.0.1:8443
-connect = 0.0.0.0:443
-options = NO_SSLv2
-options = NO_SSLv3
-options = NO_TLSv1
-options = NO_TLSv1.1
-options = NO_TLSv1.3
+# let stunnel connect to the requested host/port (%h and %p)
+connect = %h:%p
+; NOTE: %h:%p requires stunnel with this feature enabled (common in recent versions)
+; do NOT set an explicit host here — we want transparent target forwarding.
+
 
 
 Run:
