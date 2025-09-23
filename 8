@@ -2,3 +2,13 @@ openssl s_client -showcerts -connect example.com:443 -servername example.com </d
 openssl s_client -showcerts -connect example.com:443 -servername example.com </dev/null
 sudo cp customCA.crt /usr/local/share/ca-certificates/
 sudo update-ca-certificates
+
+
+
+sudo tee /etc/apt/apt.conf.d/99forcetls12 >/dev/null <<'EOF'
+Acquire::https::CaInfo "/etc/ssl/certs/ca-certificates.crt";
+Acquire::https::SslForceVersion "TLSv1.2";
+EOF
+
+
+curl -v --tlsv1.2 --tls-max 1.2 https://google.com
