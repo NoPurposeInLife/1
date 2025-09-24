@@ -1,0 +1,9 @@
+docker load -i bloodhound.tar
+# verify
+docker images | grep specterops/bloodhound
+
+docker run -d --name bloodhound --network host \
+  -e bhe_database_connection="postgres://bloodhound:bloodhoundcommunityedition@127.0.0.1:5432/bloodhound" \
+  -e bhe_neo4j_connection="neo4j://neo4j:bloodhoundcommunityedition@127.0.0.1:7687/" \
+  -e bhe_recreate_default_admin=false \
+  specterops/bloodhound:latest
