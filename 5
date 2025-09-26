@@ -1,14 +1,3 @@
-Sub SendWithRedemption()
-  Dim SafeItem As Object
-  Dim FileSys As Object, HtmlBody As String
-  Set FileSys = CreateObject("Scripting.FileSystemObject")
-  HtmlBody = FileSys.OpenTextFile("C:\path\raw.html", 1).ReadAll
-
-  Set SafeItem = CreateObject("Redemption.SafeMailItem")
-  SafeItem.Item = Application.CreateItem(0)
-  SafeItem.Headers = "Content-Type: text/html; charset=UTF-8"
-  SafeItem.HTMLBody = HtmlBody
-  SafeItem.Recipients.Add "recipient@example.com"
-  SafeItem.Subject = "Raw HTML via Redemption"
-  SafeItem.Send
-End Sub
+version https://git-lfs.github.com/spec/v1
+oid sha256:636ac9415de27bcb42673dd5924d3d4d9081a55174a7e94355bf409ad374ba9b
+size 548
