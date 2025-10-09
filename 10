@@ -144,5 +144,24 @@ try {
     Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | ForEach-Object {
         $nm = ($_.Name -replace 'Microsoft\.','' -replace '_.*','').Trim()
         $nm = Clean-Name $nm
-        if (-not $nm)
+        if (-not $nm) { return }
+        $ver = $_.Version.ToString()
+        $instDate = ''
+        if ($_.InstallLocation -and (Test-Path $_.InstallLocation)) {
+            try { $instDate = (Get-Item $_.InstallLocation).CreationTime.ToString('yyyy-MM-dd') } catch {}
+        }
+        $storeResults += [PSCustomObject]@{ Name=$nm; Version=$ver; 'Install Date'=$instDate }
+    }
+} catch { }
+
+# Combine, dedupe by Name
+$all = $regResults + $folderResults + $storeResults | Sort-Object Name -Unique
+
+# Export TSV (tabs preserved)
+$path = ".\AllInstalledApps.tsv"
+$all | ForEach-Object { "$($_.Name)`t$($_.Version)`t$($_.'Install Date')" } | Out-File -FilePath $path -Encoding UTF8
+
+Write-Host "`nDone. Saved to: $path"
+Write-Host "Open the TSV in Notepad, copy -> paste into Word, then Insert -> Table -> Convert Text to Table -> Tabs."
+
 
