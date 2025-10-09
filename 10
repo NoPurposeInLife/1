@@ -67,7 +67,7 @@ $folderApps = foreach ($path in $folders) {
 $allApps = $regApps + $storeApps + $folderApps | Sort-Object Name -Unique
 
 # Export to a proper TSV file
-$path = "C:\AllInstalledApps.tsv"
+$path = ".\AllInstalledApps.tsv"
 $allApps | ForEach-Object {
     "$($_.Name)`t$($_.Version)`t$($_.'Install Date')"
 } | Out-File -FilePath $path -Encoding UTF8
