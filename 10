@@ -22,69 +22,127 @@ If you want to export it:
 ... | Export-Csv "C:\installed_apps.csv" -NoTypeInformation
 ################################################
 
-# Collect installed programs from Registry (32 & 64 bit)
-$regPaths = @(
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+# --- aggressive GUID resolver + cleaner ---
+$guidRegex  = '^\{?[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}?$'
+$guidInside = '\{?[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}?'
+
+function Clean-Name([string]$n) {
+    if (-not $n) { return $null }
+    $s = $n -replace $guidInside, ''           # remove GUID substrings
+    $s = $s -replace '_\w+$',''                 # drop trailing appx-like suffixes (e.g. _8wekyb3d8bbwe)
+    $s = $s -replace '\s+[\-\–\—]\s+$',''       # trim stray trailing dash
+    $s = $s -replace '^\s+|\s+$',''             # trim
+    if ($s.Length -lt 2) { return $null }
+    return $s
+}
+
+function Resolve-GUIDName([string]$guid) {
+    if (-not $guid) { return $null }
+    $gNo = $guid -replace '[\{\}]',''
+    $searchRoots = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData",
+        "HKLM:\SOFTWARE\Classes\Installer\Products",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer"
+    )
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path $root)) { continue }
+        try {
+            Get-ChildItem -Path $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+                    foreach ($p in $props.PSObject.Properties) {
+                        $val = $p.Value
+                        if ($val -and ($val -is [string])) {
+                            if ($val -match $gNo -or $val -match $guid) {
+                                if ($props.DisplayName) { return $props.DisplayName }
+                                if ($props.ProductName) { return $props.ProductName }
+                            }
+                        }
+                    }
+                } catch { }
+            }
+        } catch { }
+    }
+    return $null
+}
+
+# Collect Registry uninstall entries (HKLM 32/64 + HKCU)
+$regRoots = @(
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
 )
 
-$guidPattern = '^\{[0-9A-Fa-f\-]{36}\}$'
+$regResults = @()
+foreach ($root in $regRoots) {
+    if (-not (Test-Path $root)) { continue }
+    Get-ChildItem -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
+        $sub = $_
+        try {
+            $p = Get-ItemProperty -Path $sub.PSPath -ErrorAction SilentlyContinue
+        } catch { continue }
+        $rawName = $p.DisplayName
+        if (-not $rawName) {
+            # try to resolve using subkey name (often a GUID)
+            $resolved = Resolve-GUIDName $sub.PSChildName
+            if ($resolved) {
+                $rawName = $resolved
+                Write-Host "Resolved [$($sub.PSChildName)] -> $rawName"
+            }
+        }
+        # If we have a name, try to clean it (strip GUID substrings, appx suffixes, etc.)
+        if ($rawName) {
+            $cleaned = Clean-Name $rawName
+            if ($cleaned -and ($cleaned -ne $rawName)) {
+                Write-Host "Cleaned: '$rawName' -> '$cleaned'"
+            }
+            $rawName = $cleaned
+        }
+        if (-not $rawName) { continue }                # still nothing -> skip
+        if ($rawName -match $guidRegex -or $rawName -match $guidInside) { continue }  # if still GUID-ish skip
 
-$regApps = Get-ItemProperty $regPaths -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.DisplayName -and
-        ($_.DisplayName -notmatch $guidPattern) -and
-        ($_.PSChildName -notmatch $guidPattern)
-    } |
-    Select-Object @{n='Name';e={$_.DisplayName.Trim()}},
-                  @{n='Version';e={$_.DisplayVersion}},
-                  @{n='Install Date';e={
-                      if ($_.InstallDate -match '^\d{8}$') {
-                          [datetime]::ParseExact($_.InstallDate,'yyyyMMdd',$null).ToString('yyyy-MM-dd')
-                      } else { '' }
-                  }}
+        $ver = if ($p.PSObject.Properties.Match('DisplayVersion')) { $p.DisplayVersion } else { '' }
+        $instDate = ''
+        if ($p.PSObject.Properties.Match('InstallDate') -and $p.InstallDate -match '^\d{8}$') {
+            $instDate = [datetime]::ParseExact($p.InstallDate,'yyyyMMdd',$null).ToString('yyyy-MM-dd')
+        } elseif ($p.PSObject.Properties.Match('InstallDate')) {
+            $instDate = $p.InstallDate
+        }
+        $regResults += [PSCustomObject]@{
+            Name = $rawName
+            Version = $ver
+            'Install Date' = $instDate
+        }
+    }
+}
 
-# Collect Windows Store / AppX apps
-$storeApps = Get-AppxPackage |
-    Select-Object @{n='Name';e={
-                        ($_.Name -replace 'Microsoft\.','' -replace '_.*','').Trim()
-                    }},
-                  @{n='Version';e={$_.Version}},
-                  @{n='Install Date';e={
-                      if ($_.InstallLocation -and (Test-Path $_.InstallLocation)) {
-                          (Get-Item $_.InstallLocation).CreationTime.ToString('yyyy-MM-dd')
-                      } else { '' }
-                  }}
-
-# Collect folders in Program Files & Program Files (x86)
-$folders = @("$env:ProgramFiles", "$env:ProgramFiles(x86)")
-$folderApps = foreach ($path in $folders) {
-    if (Test-Path $path) {
-        Get-ChildItem -Path $path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.Name -notmatch $guidPattern) {
-                $exe = Get-ChildItem -Path $_.FullName -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($exe) {
-                    $ver = (Get-Item $exe.FullName).VersionInfo
-                    [PSCustomObject]@{
-                        Name = $_.Name
-                        Version = $ver.ProductVersion
-                        'Install Date' = (Get-Item $_.FullName).CreationTime.ToString('yyyy-MM-dd')
-                    }
-                }
+# Program Files (folders) - skip GUID-named folders
+$pfPaths = @("$env:ProgramFiles","$env:ProgramFiles(x86)")
+$folderResults = @()
+foreach ($path in $pfPaths) {
+    if (-not (Test-Path $path)) { continue }
+    Get-ChildItem -Path $path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -match $guidRegex) { continue }
+        $exe = Get-ChildItem -Path $_.FullName -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($exe) {
+            $ver = ''
+            try { $ver = (Get-Item $exe.FullName).VersionInfo.ProductVersion } catch {}
+            $installDate = ''
+            try { $installDate = (Get-Item $_.FullName).CreationTime.ToString('yyyy-MM-dd') } catch {}
+            $folderResults += [PSCustomObject]@{
+                Name = $_.Name
+                Version = $ver
+                'Install Date' = $installDate
             }
         }
     }
 }
 
-# Merge all, sort, and deduplicate
-$allApps = $regApps + $storeApps + $folderApps | Sort-Object Name -Unique
+# Appx / Store packages - clean names
+$storeResults = @()
+try {
+    Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | ForEach-Object {
+        $nm = ($_.Name -replace 'Microsoft\.','' -replace '_.*','').Trim()
+        $nm = Clean-Name $nm
+        if (-not $nm)
 
-# Export as TSV (tab-separated, preserves tabs)
-$path = ".\AllInstalledApps.tsv"
-$allApps | ForEach-Object {
-    "$($_.Name)`t$($_.Version)`t$($_.'Install Date')"
-} | Out-File -FilePath $path -Encoding UTF8
-
-Write-Host "`nSaved clean results to $path"
-Write-Host "→ Open in Notepad, then copy & paste into Word."
-Write-Host "→ In Word: Insert → Table → Convert Text to Table → Tabs as separator."
