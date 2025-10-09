@@ -20,21 +20,55 @@ InstallDate → Date in YYYYMMDD format
 If you want to export it:
 
 ... | Export-Csv "C:\installed_apps.csv" -NoTypeInformation
+################################################
 
+# Gather classic installed programs (from Registry)
+$classicApps = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
+                                 HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+               Where-Object { $_.DisplayName -and $_.DisplayVersion } |
+               Select-Object @{Name='Name';Expression={$_.DisplayName}},
+                             @{Name='Version';Expression={$_.DisplayVersion}},
+                             @{Name='Install Date';Expression={
+                                 if ($_.InstallDate -match '^\d{8}$') {
+                                     [datetime]::ParseExact($_.InstallDate, 'yyyyMMdd', $null).ToString('yyyy-MM-dd')
+                                 } else { '' }
+                             }},
+                             @{Name='Source';Expression={'Registry'}}
 
-$apps = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
-                         HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
-         Where-Object { $_.DisplayName -and $_.DisplayVersion } |
-         Select-Object @{Name='Name';Expression={$_.DisplayName}},
-                       @{Name='Version';Expression={$_.DisplayVersion}},
-                       @{Name='Install Date';Expression={
-                           if ($_.InstallDate -match '^\d{8}$') {
-                               [datetime]::ParseExact($_.InstallDate, 'yyyyMMdd', $null).ToString('yyyy-MM-dd')
-                           } else {
-                               ''
-                           }
-                       }} |
-         Sort-Object Name
+# Gather portable apps (from Program Files and Program Files (x86))
+$pfPaths = @("$env:ProgramFiles", "$env:ProgramFiles(x86)")
+$portableApps = @()
+foreach ($path in $pfPaths) {
+    if (Test-Path $path) {
+        Get-ChildItem -Path $path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $exe = Get-ChildItem -Path $_.FullName -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exe) {
+                $ver = (Get-Item $exe.FullName).VersionInfo
+                $portableApps += [PSCustomObject]@{
+                    Name = $_.Name
+                    Version = $ver.ProductVersion
+                    'Install Date' = ''
+                    Source = "Folder ($path)"
+                }
+            }
+        }
+    }
+}
 
-$apps | Format-Table -AutoSize
+# Gather Windows Store / AppX apps
+$storeApps = Get-AppxPackage | Select-Object @{Name='Name';Expression={$_.Name}},
+                                         @{Name='Version';Expression={$_.Version}},
+                                         @{Name='Install Date';Expression={
+                                             if ($_.InstallLocation) {
+                                                 (Get-Item $_.InstallLocation).CreationTime.ToString('yyyy-MM-dd')
+                                             } else { '' }
+                                         }},
+                                         @{Name='Source';Expression={'Windows Store'}}
+
+# Combine all results
+$allApps = $classicApps + $portableApps + $storeApps
+
+# Sort and display in clean table
+$allApps | Sort-Object Name | Format-Table -AutoSize
+
 
