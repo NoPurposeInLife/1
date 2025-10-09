@@ -20,3 +20,21 @@ InstallDate → Date in YYYYMMDD format
 If you want to export it:
 
 ... | Export-Csv "C:\installed_apps.csv" -NoTypeInformation
+
+
+$apps = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
+                         HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+         Where-Object { $_.DisplayName -and $_.DisplayVersion } |
+         Select-Object @{Name='Name';Expression={$_.DisplayName}},
+                       @{Name='Version';Expression={$_.DisplayVersion}},
+                       @{Name='Install Date';Expression={
+                           if ($_.InstallDate -match '^\d{8}$') {
+                               [datetime]::ParseExact($_.InstallDate, 'yyyyMMdd', $null).ToString('yyyy-MM-dd')
+                           } else {
+                               ''
+                           }
+                       }} |
+         Sort-Object Name
+
+$apps | Format-Table -AutoSize
+
