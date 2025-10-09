@@ -1,0 +1,22 @@
+1. PowerShell (Recommended)
+
+This method works on all modern Windows Server versions (2012 → 2025).
+
+Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
+                 HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+Select-Object DisplayName, DisplayVersion, InstallDate |
+Where-Object { $_.DisplayName -and $_.DisplayVersion } |
+Sort-Object DisplayName
+
+
+Output fields:
+
+DisplayName → App name
+
+DisplayVersion → Installed version
+
+InstallDate → Date in YYYYMMDD format
+
+If you want to export it:
+
+... | Export-Csv "C:\installed_apps.csv" -NoTypeInformation
