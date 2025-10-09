@@ -22,53 +22,57 @@ If you want to export it:
 ... | Export-Csv "C:\installed_apps.csv" -NoTypeInformation
 ################################################
 
-# Gather classic installed programs (from Registry)
-$classicApps = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
-                                 HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
-               Where-Object { $_.DisplayName -and $_.DisplayVersion } |
-               Select-Object @{Name='Name';Expression={$_.DisplayName}},
-                             @{Name='Version';Expression={$_.DisplayVersion}},
-                             @{Name='Install Date';Expression={
-                                 if ($_.InstallDate -match '^\d{8}$') {
-                                     [datetime]::ParseExact($_.InstallDate, 'yyyyMMdd', $null).ToString('yyyy-MM-dd')
-                                 } else { '' }
-                             }},
-                             @{Name='Source';Expression={'Registry'}}
+# Create a clean list of everything (Registry + Program Files + Windows Apps)
+$regPaths = @(
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
 
-# Gather portable apps (from Program Files and Program Files (x86))
-$pfPaths = @("$env:ProgramFiles", "$env:ProgramFiles(x86)")
-$portableApps = @()
-foreach ($path in $pfPaths) {
+$regApps = Get-ItemProperty $regPaths -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -and ($_.DisplayName -notmatch '^\{[0-9A-F\-]+\}$') } |
+    Select-Object @{n='Name';e={$_.DisplayName}},
+                  @{n='Version';e={$_.DisplayVersion}},
+                  @{n='Install Date';e={
+                      if ($_.InstallDate -match '^\d{8}$') {
+                          [datetime]::ParseExact($_.InstallDate,'yyyyMMdd',$null).ToString('yyyy-MM-dd')
+                      } else { '' }
+                  }}
+
+$storeApps = Get-AppxPackage |
+    Select-Object @{n='Name';e={$_.Name}},
+                  @{n='Version';e={$_.Version}},
+                  @{n='Install Date';e={
+                      if ($_.InstallLocation -and (Test-Path $_.InstallLocation)) {
+                          (Get-Item $_.InstallLocation).CreationTime.ToString('yyyy-MM-dd')
+                      } else { '' }
+                  }}
+
+$folders = @("$env:ProgramFiles", "$env:ProgramFiles(x86)")
+$folderApps = foreach ($path in $folders) {
     if (Test-Path $path) {
         Get-ChildItem -Path $path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
             $exe = Get-ChildItem -Path $_.FullName -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exe) {
                 $ver = (Get-Item $exe.FullName).VersionInfo
-                $portableApps += [PSCustomObject]@{
+                [PSCustomObject]@{
                     Name = $_.Name
                     Version = $ver.ProductVersion
-                    'Install Date' = ''
-                    Source = "Folder ($path)"
+                    'Install Date' = (Get-Item $_.FullName).CreationTime.ToString('yyyy-MM-dd')
                 }
             }
         }
     }
 }
 
-# Gather Windows Store / AppX apps
-$storeApps = Get-AppxPackage | Select-Object @{Name='Name';Expression={$_.Name}},
-                                         @{Name='Version';Expression={$_.Version}},
-                                         @{Name='Install Date';Expression={
-                                             if ($_.InstallLocation) {
-                                                 (Get-Item $_.InstallLocation).CreationTime.ToString('yyyy-MM-dd')
-                                             } else { '' }
-                                         }},
-                                         @{Name='Source';Expression={'Windows Store'}}
+$allApps = $regApps + $storeApps + $folderApps | Sort-Object Name -Unique
 
-# Combine all results
-$allApps = $classicApps + $portableApps + $storeApps
+# Export to a proper TSV file
+$path = "C:\AllInstalledApps.tsv"
+$allApps | ForEach-Object {
+    "$($_.Name)`t$($_.Version)`t$($_.'Install Date')"
+} | Out-File -FilePath $path -Encoding UTF8
 
-# Sort and display in clean table
-$allApps | Sort-Object Name | Format-Table -AutoSize
+Write-Host "Saved to $path — open it in Notepad to verify tabs, then copy to Word and use 'Convert Text to Table'."
+
 
 
