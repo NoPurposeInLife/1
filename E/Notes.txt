@@ -1,0 +1,30 @@
+# Clone the repo (shallow, just the latest commit)
+git clone --depth 1 https://github.com/confident-ai/deepteam.git
+
+# Make sure you're in the outer folder (containing the cloned "deepteam" repo folder)
+# e.g. D:\Games\ECGS\[Permanent] Work\RootCyber\[Permanent] Tasks\38. Copilot Webgrounding\Deepteam
+
+$repoPath = Join-Path (Get-Location) "deepteam"
+$outFile  = Join-Path (Get-Location) "deepteam_all_prompts.txt"
+
+if (Test-Path -LiteralPath $outFile) { Remove-Item -LiteralPath $outFile }
+New-Item -LiteralPath $outFile -ItemType File | Out-Null
+
+Get-ChildItem -LiteralPath $repoPath -Recurse -File |
+    Where-Object { $_.Name -match "template.*\.py$|prompt.*\.py$" } |
+    Sort-Object FullName |
+    ForEach-Object {
+        $relativePath = $_.FullName.Substring($repoPath.Length + 1)
+        Add-Content -LiteralPath $outFile -Value ("=" * 42)
+        Add-Content -LiteralPath $outFile -Value "FILE: deepteam/$relativePath"
+        Add-Content -LiteralPath $outFile -Value ("=" * 42)
+        Get-Content -LiteralPath $_.FullName | Add-Content -LiteralPath $outFile
+        Add-Content -LiteralPath $outFile -Value ""
+        Add-Content -LiteralPath $outFile -Value ""
+    }
+
+(Get-Content -LiteralPath $outFile).Count
+Write-Host "Done -> $outFile"
+
+
+# Upload deepteam_all_prompts.txt to grok and say parse, only 'i only want want the prompts in csv, but give me deepteam_all_prompts_parsed.csv that has prompts not prompts template, for each prompt_template fill in the template and give me prompt, in the csv make sure there is 3 column, "file","function","prompt"'
